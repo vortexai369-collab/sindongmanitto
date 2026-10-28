@@ -1,0 +1,50 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "users",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "workspaceOwnerUid", "orderConfig": "ASCENDING" },
+        { "fieldPath": "classId", "orderConfig": "ASCENDING" },
+        { "fieldPath": "role", "orderConfig": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "missionSubmissions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "workspaceOwnerUid", "orderConfig": "ASCENDING" },
+        { "fieldPath": "studentUid", "orderConfig": "ASCENDING" },
+        { "fieldPath": "activityDate", "orderConfig": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "scoreLedger",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "workspaceOwnerUid", "orderConfig": "ASCENDING" },
+        { "fieldPath": "studentUid", "orderConfig": "ASCENDING" },
+        { "fieldPath": "activityDate", "orderConfig": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "letters",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "workspaceOwnerUid", "orderConfig": "ASCENDING" },
+        { "fieldPath": "threadId", "orderConfig": "ASCENDING" },
+        { "fieldPath": "createdAt", "orderConfig": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "loungeMessages",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "workspaceOwnerUid", "orderConfig": "ASCENDING" },
+        { "fieldPath": "sessionId", "orderConfig": "ASCENDING" },
+        { "fieldPath": "createdAt", "orderConfig": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

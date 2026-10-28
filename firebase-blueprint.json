@@ -1,0 +1,604 @@
+{
+  "entities": {
+    "Admin": {
+      "title": "Admin",
+      "description": "Approved administrator or teacher account record.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "maxLength": 200 },
+        "workspaceOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "workspaceOwnerUid", "createdAt"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Teacher or student profile in Jeonju Shindong Elementary Manitto platform.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "role": { "type": "string", "enum": ["teacher", "student"], "maxLength": 20 },
+        "studentLoginId": { "type": "string", "maxLength": 64 },
+        "passwordHash": { "type": "string", "maxLength": 128 },
+        "displayName": { "type": "string", "maxLength": 60 },
+        "classId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "avatarId": { "type": "string", "maxLength": 40 },
+        "bio": { "type": "string", "maxLength": 300 },
+        "interests": { "type": "array", "description": "Student interests up to 10 items" },
+        "hobbies": { "type": "array", "description": "Student hobbies up to 10 items" },
+        "favoriteFood": { "type": "string", "maxLength": 120 },
+        "strengths": { "type": "string", "maxLength": 200 },
+        "cheerWanted": { "type": "string", "maxLength": 200 },
+        "profileVisibility": { "type": "string", "enum": ["private", "manitto", "class"], "maxLength": 20 },
+        "accountStatus": { "type": "string", "enum": ["active", "inactive"], "maxLength": 20 },
+        "lastLoginAt": { "type": "string", "maxLength": 40 },
+        "lastHeartbeatAt": { "type": "string", "maxLength": 40 },
+        "isOnlineSession": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid",
+        "workspaceOwnerUid",
+        "role",
+        "studentLoginId",
+        "passwordHash",
+        "displayName",
+        "classId",
+        "avatarId",
+        "bio",
+        "interests",
+        "hobbies",
+        "favoriteFood",
+        "strengths",
+        "cheerWanted",
+        "profileVisibility",
+        "accountStatus",
+        "lastLoginAt",
+        "lastHeartbeatAt",
+        "isOnlineSession",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ClassRoom": {
+      "title": "ClassRoom",
+      "description": "Classroom entity managed by teachers at Jeonju Shindong Elementary School.",
+      "type": "object",
+      "properties": {
+        "classId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "maxLength": 80 },
+        "schoolName": { "type": "string", "maxLength": 80 },
+        "teacherUids": { "type": "array", "description": "Up to 10 teacher UIDs" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["classId", "workspaceOwnerUid", "name", "schoolName", "teacherUids", "active", "createdAt", "updatedAt"]
+    },
+    "ManittoAssignment": {
+      "title": "ManittoAssignment",
+      "description": "Secret Manitto pairing between giver student and receiver student.",
+      "type": "object",
+      "properties": {
+        "assignmentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "classId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "giverUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "receiverUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "active": { "type": "boolean" },
+        "startsAt": { "type": "string", "maxLength": 40 },
+        "endsAt": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["assignmentId", "workspaceOwnerUid", "classId", "giverUid", "receiverUid", "active", "startsAt", "endsAt", "createdAt", "updatedAt"]
+    },
+    "Mission": {
+      "title": "Mission",
+      "description": "Kindness and care Manitto mission definition.",
+      "type": "object",
+      "properties": {
+        "missionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orderIndex": { "type": "number" },
+        "title": { "type": "string", "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 400 },
+        "howTo": { "type": "string", "maxLength": 400 },
+        "category": { "type": "string", "enum": ["kindness", "observation", "care", "gratitude", "cooperation"], "maxLength": 30 },
+        "difficulty": { "type": "string", "enum": ["easy", "medium", "hard"], "maxLength": 20 },
+        "points": { "type": "number" },
+        "active": { "type": "boolean" },
+        "requiresTeacherApproval": { "type": "boolean" },
+        "allowRepeat": { "type": "boolean" },
+        "maxCompletions": { "type": "number" },
+        "badgeRuleType": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "missionId",
+        "workspaceOwnerUid",
+        "orderIndex",
+        "title",
+        "description",
+        "howTo",
+        "category",
+        "difficulty",
+        "points",
+        "active",
+        "requiresTeacherApproval",
+        "allowRepeat",
+        "maxCompletions",
+        "badgeRuleType",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "MissionSubmission": {
+      "title": "MissionSubmission",
+      "description": "Student action record for a Manitto mission.",
+      "type": "object",
+      "properties": {
+        "submissionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "missionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "classId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actionDescription": { "type": "string", "maxLength": 500 },
+        "reflection": { "type": "string", "maxLength": 500 },
+        "activityDate": { "type": "string", "maxLength": 20 },
+        "evidenceNote": { "type": "string", "maxLength": 200 },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected", "deleted"], "maxLength": 20 },
+        "awardedPoints": { "type": "number" },
+        "reviewedBy": { "type": "string", "maxLength": 128 },
+        "reviewedAt": { "type": "string", "maxLength": 40 },
+        "reviewComment": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "submissionId",
+        "workspaceOwnerUid",
+        "missionId",
+        "studentUid",
+        "classId",
+        "actionDescription",
+        "reflection",
+        "activityDate",
+        "evidenceNote",
+        "status",
+        "awardedPoints",
+        "reviewedBy",
+        "reviewedAt",
+        "reviewComment",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ScoreLedger": {
+      "title": "ScoreLedger",
+      "description": "Immutable ledger entry for student point additions and reversals.",
+      "type": "object",
+      "properties": {
+        "ledgerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "classId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "sourceType": { "type": "string", "enum": ["mission", "adjustment", "reversal"], "maxLength": 20 },
+        "sourceId": { "type": "string", "maxLength": 128 },
+        "pointsDelta": { "type": "number" },
+        "activityDate": { "type": "string", "maxLength": 20 },
+        "reason": { "type": "string", "maxLength": 240 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "reversalOf": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ledgerId",
+        "workspaceOwnerUid",
+        "studentUid",
+        "classId",
+        "sourceType",
+        "sourceId",
+        "pointsDelta",
+        "activityDate",
+        "reason",
+        "createdBy",
+        "reversalOf",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StudentStats": {
+      "title": "StudentStats",
+      "description": "Aggregated score, mission, and badge counts per student.",
+      "type": "object",
+      "properties": {
+        "studentUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "classId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "totalPoints": { "type": "number" },
+        "completedMissionCount": { "type": "number" },
+        "earnedBadgeCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "studentUid",
+        "workspaceOwnerUid",
+        "classId",
+        "totalPoints",
+        "completedMissionCount",
+        "earnedBadgeCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Badge": {
+      "title": "Badge",
+      "description": "Manitto achievement badge definition (5 core types).",
+      "type": "object",
+      "properties": {
+        "badgeId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "maxLength": 80 },
+        "description": { "type": "string", "maxLength": 240 },
+        "icon": { "type": "string", "maxLength": 40 },
+        "criteria": { "type": "string", "maxLength": 200 },
+        "targetCount": { "type": "number" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["badgeId", "workspaceOwnerUid", "name", "description", "icon", "criteria", "targetCount", "active", "createdAt", "updatedAt"]
+    },
+    "BadgeAward": {
+      "title": "BadgeAward",
+      "description": "Record of a badge awarded to a student.",
+      "type": "object",
+      "properties": {
+        "awardId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "badgeId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "classId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "awardedAt": { "type": "string", "maxLength": 40 },
+        "criteriaSnapshot": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["awardId", "workspaceOwnerUid", "studentUid", "badgeId", "classId", "awardedAt", "criteriaSnapshot", "createdAt", "updatedAt"]
+    },
+    "LetterThread": {
+      "title": "LetterThread",
+      "description": "Anonymous letter thread linked to a Manitto assignment.",
+      "type": "object",
+      "properties": {
+        "threadId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "classId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "assignmentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "participantUids": { "type": "array", "description": "Exactly 2 student UIDs in the Manitto pair" },
+        "lastMessageAt": { "type": "string", "maxLength": 40 },
+        "status": { "type": "string", "enum": ["active", "archived"], "maxLength": 20 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["threadId", "workspaceOwnerUid", "classId", "assignmentId", "participantUids", "lastMessageAt", "status", "createdAt", "updatedAt"]
+    },
+    "Letter": {
+      "title": "Letter",
+      "description": "Anonymous letter sent between a Manitto and their friend.",
+      "type": "object",
+      "properties": {
+        "letterId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "threadId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "classId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "receiverUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderDirection": { "type": "string", "enum": ["from_manitto", "to_manitto"], "maxLength": 20 },
+        "subject": { "type": "string", "maxLength": 120 },
+        "body": { "type": "string", "maxLength": 1000 },
+        "readAt": { "type": "string", "maxLength": 40 },
+        "moderationStatus": { "type": "string", "enum": ["normal", "reported", "hidden"], "maxLength": 20 },
+        "deletedAt": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "letterId",
+        "workspaceOwnerUid",
+        "threadId",
+        "classId",
+        "senderUid",
+        "receiverUid",
+        "senderDirection",
+        "subject",
+        "body",
+        "readAt",
+        "moderationStatus",
+        "deletedAt",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "LoungeSession": {
+      "title": "LoungeSession",
+      "description": "Real-time anonymous classroom lounge session.",
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "classId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "maxLength": 120 },
+        "noticeRules": { "type": "string", "maxLength": 400 },
+        "scheduledDate": { "type": "string", "maxLength": 20 },
+        "startsAt": { "type": "string", "maxLength": 40 },
+        "endsAt": { "type": "string", "maxLength": 40 },
+        "status": { "type": "string", "enum": ["scheduled", "waiting", "active", "ended"], "maxLength": 20 },
+        "waitingCount": { "type": "number" },
+        "participantCount": { "type": "number" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "sessionId",
+        "workspaceOwnerUid",
+        "classId",
+        "title",
+        "noticeRules",
+        "scheduledDate",
+        "startsAt",
+        "endsAt",
+        "status",
+        "waitingCount",
+        "participantCount",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "LoungeParticipant": {
+      "title": "LoungeParticipant",
+      "description": "Student presence and anonymous alias inside a lounge session.",
+      "type": "object",
+      "properties": {
+        "participantUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "sessionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "anonymousAlias": { "type": "string", "maxLength": 40 },
+        "presenceStatus": { "type": "string", "enum": ["waiting", "active", "left"], "maxLength": 20 },
+        "aliasChangeCount": { "type": "number" },
+        "joinedAt": { "type": "string", "maxLength": 40 },
+        "lastHeartbeatAt": { "type": "string", "maxLength": 40 },
+        "aliasChangedAt": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "participantUid",
+        "workspaceOwnerUid",
+        "sessionId",
+        "anonymousAlias",
+        "presenceStatus",
+        "aliasChangeCount",
+        "joinedAt",
+        "lastHeartbeatAt",
+        "aliasChangedAt",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "LoungeMessage": {
+      "title": "LoungeMessage",
+      "description": "Real-time chat message in the anonymous classroom lounge.",
+      "type": "object",
+      "properties": {
+        "messageId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "sessionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "classId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "anonymousAlias": { "type": "string", "maxLength": 40 },
+        "body": { "type": "string", "maxLength": 400 },
+        "moderationStatus": { "type": "string", "enum": ["normal", "reported", "hidden"], "maxLength": 20 },
+        "hiddenAt": { "type": "string", "maxLength": 40 },
+        "hiddenBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "messageId",
+        "workspaceOwnerUid",
+        "sessionId",
+        "classId",
+        "senderUid",
+        "anonymousAlias",
+        "body",
+        "moderationStatus",
+        "hiddenAt",
+        "hiddenBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Report": {
+      "title": "Report",
+      "description": "Safety report submitted by a student for an inappropriate letter or lounge message.",
+      "type": "object",
+      "properties": {
+        "reportId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "classId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "reporterUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "targetType": { "type": "string", "enum": ["letter", "loungeMessage", "mission"], "maxLength": 20 },
+        "targetId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "targetPreview": { "type": "string", "maxLength": 300 },
+        "reason": { "type": "string", "maxLength": 300 },
+        "status": { "type": "string", "enum": ["pending", "resolved", "dismissed"], "maxLength": 20 },
+        "reviewedBy": { "type": "string", "maxLength": 128 },
+        "reviewedAt": { "type": "string", "maxLength": 40 },
+        "reviewNote": { "type": "string", "maxLength": 240 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "reportId",
+        "workspaceOwnerUid",
+        "classId",
+        "reporterUid",
+        "targetType",
+        "targetId",
+        "targetPreview",
+        "reason",
+        "status",
+        "reviewedBy",
+        "reviewedAt",
+        "reviewNote",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable teacher administrative action audit trail.",
+      "type": "object",
+      "properties": {
+        "logId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorName": { "type": "string", "maxLength": 80 },
+        "action": { "type": "string", "maxLength": 80 },
+        "targetType": { "type": "string", "maxLength": 40 },
+        "targetId": { "type": "string", "maxLength": 128 },
+        "reason": { "type": "string", "maxLength": 300 },
+        "metadataSummary": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "logId",
+        "workspaceOwnerUid",
+        "actorUid",
+        "actorName",
+        "action",
+        "targetType",
+        "targetId",
+        "reason",
+        "metadataSummary",
+        "createdAt"
+      ]
+    },
+    "AppSetting": {
+      "title": "AppSetting",
+      "description": "School and classroom policy settings for Manitto operation.",
+      "type": "object",
+      "properties": {
+        "settingId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceOwnerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "loungeRules": { "type": "string", "maxLength": 500 },
+        "profilePolicy": { "type": "string", "maxLength": 500 },
+        "letterModerationPolicy": { "type": "string", "maxLength": 500 },
+        "dataRetentionPolicy": { "type": "string", "maxLength": 500 },
+        "identityRevealPolicy": { "type": "string", "enum": ["hidden", "revealed"], "maxLength": 20 },
+        "allowPhotoEvidence": { "type": "boolean" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "settingId",
+        "workspaceOwnerUid",
+        "loungeRules",
+        "profilePolicy",
+        "letterModerationPolicy",
+        "dataRetentionPolicy",
+        "identityRevealPolicy",
+        "allowPhotoEvidence",
+        "updatedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/Admin" },
+      "description": "Approved administrator records."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Teacher and student user profiles."
+    },
+    "/classes/{classId}": {
+      "schema": { "$ref": "#/entities/ClassRoom" },
+      "description": "School classes."
+    },
+    "/manittoAssignments/{assignmentId}": {
+      "schema": { "$ref": "#/entities/ManittoAssignment" },
+      "description": "Secret Manitto pairings."
+    },
+    "/missions/{missionId}": {
+      "schema": { "$ref": "#/entities/Mission" },
+      "description": "20 Manitto missions."
+    },
+    "/missionSubmissions/{submissionId}": {
+      "schema": { "$ref": "#/entities/MissionSubmission" },
+      "description": "Student mission practice submissions."
+    },
+    "/scoreLedger/{ledgerId}": {
+      "schema": { "$ref": "#/entities/ScoreLedger" },
+      "description": "Immutable score ledger entries."
+    },
+    "/studentStats/{statId}": {
+      "schema": { "$ref": "#/entities/StudentStats" },
+      "description": "Aggregated student score and mission stats."
+    },
+    "/badges/{badgeId}": {
+      "schema": { "$ref": "#/entities/Badge" },
+      "description": "5 Manitto badge definitions."
+    },
+    "/badgeAwards/{awardId}": {
+      "schema": { "$ref": "#/entities/BadgeAward" },
+      "description": "Badges awarded to students."
+    },
+    "/letterThreads/{threadId}": {
+      "schema": { "$ref": "#/entities/LetterThread" },
+      "description": "Anonymous letter conversation threads."
+    },
+    "/letters/{letterId}": {
+      "schema": { "$ref": "#/entities/Letter" },
+      "description": "Anonymous letters and replies."
+    },
+    "/loungeSessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/LoungeSession" },
+      "description": "Classroom anonymous lounge sessions."
+    },
+    "/loungeSessions/{sessionId}/participants/{participantId}": {
+      "schema": { "$ref": "#/entities/LoungeParticipant" },
+      "description": "Real-time lounge waiting and active participants."
+    },
+    "/loungeMessages/{messageId}": {
+      "schema": { "$ref": "#/entities/LoungeMessage" },
+      "description": "Anonymous lounge chat messages."
+    },
+    "/reports/{reportId}": {
+      "schema": { "$ref": "#/entities/Report" },
+      "description": "Student safety reports on letters or messages."
+    },
+    "/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable teacher audit trail."
+    },
+    "/appSettings/{settingId}": {
+      "schema": { "$ref": "#/entities/AppSetting" },
+      "description": "Platform policies and configuration."
+    }
+  }
+}
