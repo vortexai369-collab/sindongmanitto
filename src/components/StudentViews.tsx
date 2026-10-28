@@ -2471,17 +2471,129 @@ const StudentLoungeView: React.FC<StudentContextProps> = ({
 const StudentSettingsView: React.FC<StudentContextProps> = ({
   currentStudent,
   appSettings,
+  onNotify,
 }) => {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [changing, setChanging] = useState(false);
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (changing) return;
+
+    if (newPassword.trim().length < 4) {
+      onNotify('새 비밀번호는 4자리 이상으로 입력해 주세요.', 'error');
+      return;
+    }
+    if (newPassword.trim() !== confirmPassword.trim()) {
+      onNotify('새 비밀번호와 비밀번호 확인이 일치하지 않아요.', 'error');
+      return;
+    }
+
+    setChanging(true);
+    try {
+      const curHash = await hashPassword(currentPassword.trim());
+      if (curHash !== currentStudent.passwordHash) {
+        onNotify('현재 비밀번호가 맞지 않아요. 다시 확인해 주세요.', 'error');
+        setChanging(false);
+        return;
+      }
+
+      const nextHash = await hashPassword(newPassword.trim());
+      await updateDoc(doc(db, 'users', currentStudent.uid), {
+        passwordHash: nextHash,
+        updatedAt: serverTimestamp(),
+      });
+
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      onNotify('나의 비밀번호가 안전하게 변경되었어요! 다음 로그인부터 새 비밀번호를 사용하세요.', 'success');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `users/${currentStudent.uid}`);
+    } finally {
+      setChanging(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
         <p className="text-xs font-semibold text-[#6B665E] mb-1">
-          전주신동초 개인정보 보호 및 안전 이용 안내
+          나의 비밀번호 변경 및 전주신동초 개인정보 보호 안내
         </p>
         <h1 className="text-2xl sm:text-3xl font-extrabold text-[#141413]">
-          안전하고 따뜻한 마니또 약속
+          나의 비밀번호 변경 & 마니또 안전 약속
         </h1>
       </div>
+
+      {/* Student Password Change Card */}
+      <form
+        onSubmit={handleChangePassword}
+        className="bg-[#C6F0DF] rounded-[28px] p-6 space-y-4"
+      >
+        <div>
+          <h2 className="text-base font-extrabold text-[#141413]">
+            🔒 나의 로그인 비밀번호 변경하기
+          </h2>
+          <p className="text-xs text-[#065F46] mt-0.5">
+            다른 친구가 내 이름으로 들어오지 못하도록 나만의 비밀번호로 변경해 보세요. (비밀번호를 잊어버리면 선생님께 초기화를 요청할 수 있어요!)
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <label className="block text-xs font-bold text-[#141413] mb-1">
+              현재 비밀번호
+            </label>
+            <input
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              placeholder="현재 비밀번호 입력"
+              required
+              className="w-full rounded-xl bg-white px-3.5 py-2.5 text-xs text-[#141413]"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-[#141413] mb-1">
+              새 비밀번호 (4자 이상)
+            </label>
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="새 비밀번호 입력"
+              required
+              className="w-full rounded-xl bg-white px-3.5 py-2.5 text-xs text-[#141413]"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-[#141413] mb-1">
+              새 비밀번호 한 번 더 입력
+            </label>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="새 비밀번호 확인"
+              required
+              className="w-full rounded-xl bg-white px-3.5 py-2.5 text-xs text-[#141413]"
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end">
+          <button
+            type="submit"
+            disabled={changing}
+            className="px-5 py-2.5 rounded-xl bg-[#141413] text-white text-xs font-bold cursor-pointer"
+          >
+            {changing ? '변경 중...' : '새 비밀번호로 변경하기'}
+          </button>
+        </div>
+      </form>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <div className="bg-[#F3EFEA] rounded-[28px] p-6 space-y-2">

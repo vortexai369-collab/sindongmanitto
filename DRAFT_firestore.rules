@@ -20,14 +20,10 @@ service cloud.firestore {
       return resource.data;
     }
 
-    function isSignedIn() {
-      return request.auth != null && request.auth.token.email_verified == true;
-    }
-
-    function isAdmin() {
-      return isSignedIn() && (
-        request.auth.token.email == 'vortexai369@gmail.com' ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+    function isAuthorizedWorkspace(ownerUid) {
+      return ownerUid is string && ownerUid.size() >= 1 && ownerUid.size() <= 128 && (
+        ownerUid == 'shindong_5_2_ws' ||
+        (request.auth != null && request.auth.token.email_verified == true && ownerUid == request.auth.uid)
       );
     }
 
@@ -41,7 +37,7 @@ service cloud.firestore {
         data.keys().hasOnly(['uid', 'email', 'workspaceOwnerUid', 'createdAt']) &&
         isValidId(data.uid) &&
         data.email is string && data.email.size() >= 3 && data.email.size() <= 200 &&
-        data.workspaceOwnerUid == request.auth.uid &&
+        isAuthorizedWorkspace(data.workspaceOwnerUid) &&
         data.createdAt is timestamp;
     }
 
@@ -61,10 +57,10 @@ service cloud.firestore {
         'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.uid) &&
-      data.workspaceOwnerUid == request.auth.uid &&
+      isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       data.role is string && (data.role == 'teacher' || data.role == 'student') &&
-      data.studentLoginId is string && data.studentLoginId.size() <= 64 &&
-      data.passwordHash is string && data.passwordHash.size() <= 128 &&
+      data.studentLoginId is string && data.studentLoginId.size() >= 1 && data.studentLoginId.size() <= 64 &&
+      data.passwordHash is string && data.passwordHash.size() >= 1 && data.passwordHash.size() <= 128 &&
       data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
       isValidId(data.classId) &&
       data.avatarId is string && data.avatarId.size() >= 1 && data.avatarId.size() <= 40 &&
@@ -87,7 +83,7 @@ service cloud.firestore {
       return data.keys().hasAll(['classId', 'workspaceOwnerUid', 'name', 'schoolName', 'teacherUids', 'active', 'createdAt', 'updatedAt']) &&
         data.keys().hasOnly(['classId', 'workspaceOwnerUid', 'name', 'schoolName', 'teacherUids', 'active', 'createdAt', 'updatedAt']) &&
         isValidId(data.classId) &&
-        data.workspaceOwnerUid == request.auth.uid &&
+        isAuthorizedWorkspace(data.workspaceOwnerUid) &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
         data.schoolName is string && data.schoolName.size() >= 1 && data.schoolName.size() <= 80 &&
         isStringList(data.teacherUids, 10) &&
@@ -100,7 +96,7 @@ service cloud.firestore {
       return data.keys().hasAll(['assignmentId', 'workspaceOwnerUid', 'classId', 'giverUid', 'receiverUid', 'active', 'startsAt', 'endsAt', 'createdAt', 'updatedAt']) &&
         data.keys().hasOnly(['assignmentId', 'workspaceOwnerUid', 'classId', 'giverUid', 'receiverUid', 'active', 'startsAt', 'endsAt', 'createdAt', 'updatedAt']) &&
         isValidId(data.assignmentId) &&
-        data.workspaceOwnerUid == request.auth.uid &&
+        isAuthorizedWorkspace(data.workspaceOwnerUid) &&
         isValidId(data.classId) &&
         isValidId(data.giverUid) &&
         isValidId(data.receiverUid) &&
@@ -125,7 +121,7 @@ service cloud.firestore {
         'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.missionId) &&
-      data.workspaceOwnerUid == request.auth.uid &&
+      isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       data.orderIndex is number && data.orderIndex >= 1 && data.orderIndex <= 100 &&
       data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
       data.description is string && data.description.size() >= 1 && data.description.size() <= 400 &&
@@ -154,7 +150,7 @@ service cloud.firestore {
         'awardedPoints', 'reviewedBy', 'reviewedAt', 'reviewComment', 'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.submissionId) &&
-      data.workspaceOwnerUid == request.auth.uid &&
+      isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       isValidId(data.missionId) &&
       isValidId(data.studentUid) &&
       isValidId(data.classId) &&
@@ -183,7 +179,7 @@ service cloud.firestore {
         'reversalOf', 'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.ledgerId) &&
-      data.workspaceOwnerUid == request.auth.uid &&
+      isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       isValidId(data.studentUid) &&
       isValidId(data.classId) &&
       data.sourceType is string && (data.sourceType == 'mission' || data.sourceType == 'adjustment' || data.sourceType == 'reversal') &&
@@ -207,7 +203,7 @@ service cloud.firestore {
         'completedMissionCount', 'earnedBadgeCount', 'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.studentUid) &&
-      data.workspaceOwnerUid == request.auth.uid &&
+      isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       isValidId(data.classId) &&
       data.totalPoints is number && data.totalPoints >= 0 && data.totalPoints <= 10000 &&
       data.completedMissionCount is number && data.completedMissionCount >= 0 && data.completedMissionCount <= 500 &&
@@ -226,7 +222,7 @@ service cloud.firestore {
         'criteria', 'targetCount', 'active', 'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.badgeId) &&
-      data.workspaceOwnerUid == request.auth.uid &&
+      isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
       data.description is string && data.description.size() >= 1 && data.description.size() <= 240 &&
       data.icon is string && data.icon.size() >= 1 && data.icon.size() <= 40 &&
@@ -247,7 +243,7 @@ service cloud.firestore {
         'awardedAt', 'criteriaSnapshot', 'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.awardId) &&
-      data.workspaceOwnerUid == request.auth.uid &&
+      isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       isValidId(data.studentUid) &&
       isValidId(data.badgeId) &&
       isValidId(data.classId) &&
@@ -267,7 +263,7 @@ service cloud.firestore {
         'participantUids', 'lastMessageAt', 'status', 'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.threadId) &&
-      data.workspaceOwnerUid == request.auth.uid &&
+      isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       isValidId(data.classId) &&
       isValidId(data.assignmentId) &&
       isStringList(data.participantUids, 2) &&
@@ -289,7 +285,7 @@ service cloud.firestore {
         'moderationStatus', 'deletedAt', 'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.letterId) &&
-      data.workspaceOwnerUid == request.auth.uid &&
+      isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       isValidId(data.threadId) &&
       isValidId(data.classId) &&
       isValidId(data.senderUid) &&
@@ -316,7 +312,7 @@ service cloud.firestore {
         'participantCount', 'createdBy', 'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.sessionId) &&
-      data.workspaceOwnerUid == request.auth.uid &&
+      isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       isValidId(data.classId) &&
       data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
       data.noticeRules is string && data.noticeRules.size() <= 400 &&
@@ -343,7 +339,7 @@ service cloud.firestore {
         'aliasChangedAt', 'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.participantUid) &&
-      data.workspaceOwnerUid == request.auth.uid &&
+      isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       isValidId(data.sessionId) &&
       data.anonymousAlias is string && data.anonymousAlias.size() >= 1 && data.anonymousAlias.size() <= 40 &&
       data.presenceStatus is string && (data.presenceStatus == 'waiting' || data.presenceStatus == 'active' || data.presenceStatus == 'left') &&
@@ -367,7 +363,7 @@ service cloud.firestore {
         'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.messageId) &&
-      data.workspaceOwnerUid == request.auth.uid &&
+      isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       isValidId(data.sessionId) &&
       isValidId(data.classId) &&
       isValidId(data.senderUid) &&
@@ -392,7 +388,7 @@ service cloud.firestore {
         'reviewedAt', 'reviewNote', 'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.reportId) &&
-      data.workspaceOwnerUid == request.auth.uid &&
+      isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       isValidId(data.classId) &&
       isValidId(data.reporterUid) &&
       data.targetType is string && (data.targetType == 'letter' || data.targetType == 'loungeMessage' || data.targetType == 'mission') &&
@@ -417,7 +413,7 @@ service cloud.firestore {
         'targetType', 'targetId', 'reason', 'metadataSummary', 'createdAt'
       ]) &&
       isValidId(data.logId) &&
-      data.workspaceOwnerUid == request.auth.uid &&
+      isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       isValidId(data.actorUid) &&
       data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 80 &&
       data.action is string && data.action.size() >= 1 && data.action.size() <= 80 &&
@@ -440,7 +436,7 @@ service cloud.firestore {
         'allowPhotoEvidence', 'updatedBy', 'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.settingId) &&
-      data.workspaceOwnerUid == request.auth.uid &&
+      isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       data.loungeRules is string && data.loungeRules.size() <= 500 &&
       data.profilePolicy is string && data.profilePolicy.size() <= 500 &&
       data.letterModerationPolicy is string && data.letterModerationPolicy.size() <= 500 &&
@@ -455,322 +451,273 @@ service cloud.firestore {
     // Collection Match Blocks
 
     match /admins/{adminId} {
-      allow get: if isSignedIn() && isValidId(adminId) && (adminId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && existing().workspaceOwnerUid == request.auth.uid;
-      allow create: if isAdmin() && isValidId(adminId) && isValidAdmin(incoming()) && incoming().createdAt == request.time;
+      allow get: if isValidId(adminId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow create: if isValidId(adminId) && isValidAdmin(incoming()) && incoming().createdAt == request.time;
       allow update, delete: if false;
     }
 
     match /users/{userId} {
-      allow get: if isSignedIn() && isValidId(userId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && existing().workspaceOwnerUid == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(userId) && isValidUser(incoming()) && incoming().uid == userId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isSignedIn() && isValidId(userId) && isValidUser(incoming()) &&
+      allow get: if isValidId(userId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow create: if isValidId(userId) && isValidUser(incoming()) && incoming().uid == userId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) && isValidUser(incoming()) &&
         incoming().uid == existing().uid &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (existing().workspaceOwnerUid == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly([
-              'displayName', 'avatarId', 'bio', 'interests', 'hobbies',
-              'favoriteFood', 'strengths', 'cheerWanted', 'profileVisibility',
-              'passwordHash', 'accountStatus', 'lastLoginAt', 'lastHeartbeatAt',
-              'isOnlineSession', 'updatedAt'
-            ])
-          )
-        );
-      allow delete: if isSignedIn() && isValidId(userId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
+        incoming().updatedAt == request.time &&
+        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'studentLoginId', 'displayName', 'avatarId', 'bio', 'interests', 'hobbies',
+          'favoriteFood', 'strengths', 'cheerWanted', 'profileVisibility',
+          'passwordHash', 'accountStatus', 'lastLoginAt', 'lastHeartbeatAt',
+          'isOnlineSession', 'updatedAt'
+        ]);
+      allow delete: if isValidId(userId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
     match /classes/{classId} {
-      allow get: if isSignedIn() && isValidId(classId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && existing().workspaceOwnerUid == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(classId) && isValidClassRoom(incoming()) && incoming().classId == classId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isSignedIn() && isValidId(classId) && isValidClassRoom(incoming()) &&
+      allow get: if isValidId(classId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow create: if isValidId(classId) && isValidClassRoom(incoming()) && incoming().classId == classId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(classId) && isValidClassRoom(incoming()) &&
         incoming().classId == existing().classId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (existing().workspaceOwnerUid == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'schoolName', 'teacherUids', 'active', 'updatedAt'])
-          )
-        );
-      allow delete: if isAdmin() && isValidId(classId);
+        incoming().updatedAt == request.time &&
+        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'schoolName', 'teacherUids', 'active', 'updatedAt']);
+      allow delete: if false;
     }
 
     match /manittoAssignments/{assignmentId} {
-      allow get: if isSignedIn() && isValidId(assignmentId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && existing().workspaceOwnerUid == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(assignmentId) && isValidManittoAssignment(incoming()) && incoming().assignmentId == assignmentId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isSignedIn() && isValidId(assignmentId) && isValidManittoAssignment(incoming()) &&
+      allow get: if isValidId(assignmentId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow create: if isValidId(assignmentId) && isValidManittoAssignment(incoming()) && incoming().assignmentId == assignmentId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(assignmentId) && isValidManittoAssignment(incoming()) &&
         incoming().assignmentId == existing().assignmentId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (existing().workspaceOwnerUid == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['giverUid', 'receiverUid', 'active', 'startsAt', 'endsAt', 'updatedAt'])
-          )
-        );
-      allow delete: if isSignedIn() && isValidId(assignmentId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
+        incoming().updatedAt == request.time &&
+        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['giverUid', 'receiverUid', 'active', 'startsAt', 'endsAt', 'updatedAt']);
+      allow delete: if isValidId(assignmentId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
     match /missions/{missionId} {
-      allow get: if isSignedIn() && isValidId(missionId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && existing().workspaceOwnerUid == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(missionId) && isValidMission(incoming()) && incoming().missionId == missionId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isSignedIn() && isValidId(missionId) && isValidMission(incoming()) &&
+      allow get: if isValidId(missionId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow create: if isValidId(missionId) && isValidMission(incoming()) && incoming().missionId == missionId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(missionId) && isValidMission(incoming()) &&
         incoming().missionId == existing().missionId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (existing().workspaceOwnerUid == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly([
-              'title', 'description', 'howTo', 'category', 'difficulty',
-              'points', 'active', 'requiresTeacherApproval', 'allowRepeat',
-              'maxCompletions', 'badgeRuleType', 'updatedAt'
-            ])
-          )
-        );
-      allow delete: if isSignedIn() && isValidId(missionId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
+        incoming().updatedAt == request.time &&
+        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'description', 'howTo', 'category', 'difficulty',
+          'points', 'active', 'requiresTeacherApproval', 'allowRepeat',
+          'maxCompletions', 'badgeRuleType', 'updatedAt'
+        ]);
+      allow delete: if isValidId(missionId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
     match /missionSubmissions/{submissionId} {
-      allow get: if isSignedIn() && isValidId(submissionId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && existing().workspaceOwnerUid == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(submissionId) && isValidMissionSubmission(incoming()) && incoming().submissionId == submissionId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isSignedIn() && isValidId(submissionId) && isValidMissionSubmission(incoming()) &&
+      allow get: if isValidId(submissionId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow create: if isValidId(submissionId) && isValidMissionSubmission(incoming()) && incoming().submissionId == submissionId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(submissionId) && isValidMissionSubmission(incoming()) &&
         incoming().submissionId == existing().submissionId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (existing().workspaceOwnerUid == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly([
-              'actionDescription', 'reflection', 'activityDate', 'evidenceNote',
-              'status', 'awardedPoints', 'reviewedBy', 'reviewedAt',
-              'reviewComment', 'updatedAt'
-            ])
-          )
-        );
-      allow delete: if isSignedIn() && isValidId(submissionId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
+        incoming().updatedAt == request.time &&
+        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'actionDescription', 'reflection', 'activityDate', 'evidenceNote',
+          'status', 'awardedPoints', 'reviewedBy', 'reviewedAt',
+          'reviewComment', 'updatedAt'
+        ]);
+      allow delete: if isValidId(submissionId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
     match /scoreLedger/{ledgerId} {
-      allow get: if isSignedIn() && isValidId(ledgerId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && existing().workspaceOwnerUid == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(ledgerId) && isValidScoreLedger(incoming()) && incoming().ledgerId == ledgerId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isSignedIn() && isValidId(ledgerId) && isValidScoreLedger(incoming()) &&
+      allow get: if isValidId(ledgerId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow create: if isValidId(ledgerId) && isValidScoreLedger(incoming()) && incoming().ledgerId == ledgerId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(ledgerId) && isValidScoreLedger(incoming()) &&
         incoming().ledgerId == existing().ledgerId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (existing().workspaceOwnerUid == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['reversalOf', 'updatedAt'])
-          )
-        );
+        incoming().updatedAt == request.time &&
+        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['reversalOf', 'updatedAt']);
       allow delete: if false;
     }
 
     match /studentStats/{statId} {
-      allow get: if isSignedIn() && isValidId(statId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && existing().workspaceOwnerUid == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(statId) && isValidStudentStats(incoming()) && incoming().studentUid == statId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isSignedIn() && isValidId(statId) && isValidStudentStats(incoming()) &&
+      allow get: if isValidId(statId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow create: if isValidId(statId) && isValidStudentStats(incoming()) && incoming().studentUid == statId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(statId) && isValidStudentStats(incoming()) &&
         incoming().studentUid == existing().studentUid &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (existing().workspaceOwnerUid == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['totalPoints', 'completedMissionCount', 'earnedBadgeCount', 'updatedAt'])
-          )
-        );
-      allow delete: if isSignedIn() && isValidId(statId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
+        incoming().updatedAt == request.time &&
+        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['totalPoints', 'completedMissionCount', 'earnedBadgeCount', 'updatedAt']);
+      allow delete: if isValidId(statId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
     match /badges/{badgeId} {
-      allow get: if isSignedIn() && isValidId(badgeId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && existing().workspaceOwnerUid == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(badgeId) && isValidBadge(incoming()) && incoming().badgeId == badgeId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isSignedIn() && isValidId(badgeId) && isValidBadge(incoming()) &&
+      allow get: if isValidId(badgeId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow create: if isValidId(badgeId) && isValidBadge(incoming()) && incoming().badgeId == badgeId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(badgeId) && isValidBadge(incoming()) &&
         incoming().badgeId == existing().badgeId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (existing().workspaceOwnerUid == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'criteria', 'targetCount', 'active', 'updatedAt'])
-          )
-        );
-      allow delete: if isAdmin() && isValidId(badgeId);
+        incoming().updatedAt == request.time &&
+        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'criteria', 'targetCount', 'active', 'updatedAt']);
+      allow delete: if false;
     }
 
     match /badgeAwards/{awardId} {
-      allow get: if isSignedIn() && isValidId(awardId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && existing().workspaceOwnerUid == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(awardId) && isValidBadgeAward(incoming()) && incoming().awardId == awardId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isSignedIn() && isValidId(awardId) && isValidBadgeAward(incoming()) &&
+      allow get: if isValidId(awardId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow create: if isValidId(awardId) && isValidBadgeAward(incoming()) && incoming().awardId == awardId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(awardId) && isValidBadgeAward(incoming()) &&
         incoming().awardId == existing().awardId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (existing().workspaceOwnerUid == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['criteriaSnapshot', 'updatedAt'])
-          )
-        );
-      allow delete: if isSignedIn() && isValidId(awardId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
+        incoming().updatedAt == request.time &&
+        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['criteriaSnapshot', 'updatedAt']);
+      allow delete: if isValidId(awardId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
     match /letterThreads/{threadId} {
-      allow get: if isSignedIn() && isValidId(threadId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && existing().workspaceOwnerUid == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(threadId) && isValidLetterThread(incoming()) && incoming().threadId == threadId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isSignedIn() && isValidId(threadId) && isValidLetterThread(incoming()) &&
+      allow get: if isValidId(threadId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow create: if isValidId(threadId) && isValidLetterThread(incoming()) && incoming().threadId == threadId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(threadId) && isValidLetterThread(incoming()) &&
         incoming().threadId == existing().threadId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (existing().workspaceOwnerUid == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageAt', 'status', 'updatedAt'])
-          )
-        );
-      allow delete: if isAdmin() && isValidId(threadId);
+        incoming().updatedAt == request.time &&
+        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageAt', 'status', 'updatedAt']);
+      allow delete: if false;
     }
 
     match /letters/{letterId} {
-      allow get: if isSignedIn() && isValidId(letterId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && existing().workspaceOwnerUid == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(letterId) && isValidLetter(incoming()) && incoming().letterId == letterId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isSignedIn() && isValidId(letterId) && isValidLetter(incoming()) &&
+      allow get: if isValidId(letterId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow create: if isValidId(letterId) && isValidLetter(incoming()) && incoming().letterId == letterId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(letterId) && isValidLetter(incoming()) &&
         incoming().letterId == existing().letterId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (existing().workspaceOwnerUid == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['readAt', 'moderationStatus', 'deletedAt', 'updatedAt'])
-          )
-        );
-      allow delete: if isSignedIn() && isValidId(letterId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
+        incoming().updatedAt == request.time &&
+        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['readAt', 'moderationStatus', 'deletedAt', 'updatedAt']);
+      allow delete: if isValidId(letterId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
     match /loungeSessions/{sessionId} {
-      allow get: if isSignedIn() && isValidId(sessionId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && existing().workspaceOwnerUid == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(sessionId) && isValidLoungeSession(incoming()) && incoming().sessionId == sessionId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isSignedIn() && isValidId(sessionId) && isValidLoungeSession(incoming()) &&
+      allow get: if isValidId(sessionId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow create: if isValidId(sessionId) && isValidLoungeSession(incoming()) && incoming().sessionId == sessionId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(sessionId) && isValidLoungeSession(incoming()) &&
         incoming().sessionId == existing().sessionId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (existing().workspaceOwnerUid == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly([
-              'title', 'noticeRules', 'scheduledDate', 'startsAt', 'endsAt',
-              'status', 'waitingCount', 'participantCount', 'updatedAt'
-            ])
-          )
-        );
-      allow delete: if isSignedIn() && isValidId(sessionId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
+        incoming().updatedAt == request.time &&
+        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'noticeRules', 'scheduledDate', 'startsAt', 'endsAt',
+          'status', 'waitingCount', 'participantCount', 'updatedAt'
+        ]);
+      allow delete: if isValidId(sessionId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
 
       // Pillar 1 Master Gate Subcollection
       match /participants/{participantId} {
-        allow get: if isSignedIn() && isValidId(sessionId) && isValidId(participantId) &&
-          get(/databases/$(database)/documents/loungeSessions/$(sessionId)).data.workspaceOwnerUid == request.auth.uid;
-        allow list: if isSignedIn() && existing().workspaceOwnerUid == request.auth.uid;
-        allow create: if isSignedIn() && isValidId(sessionId) && isValidId(participantId) &&
+        allow get: if isValidId(sessionId) && isValidId(participantId) &&
+          isAuthorizedWorkspace(get(/databases/$(database)/documents/loungeSessions/$(sessionId)).data.workspaceOwnerUid);
+        allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
+        allow create: if isValidId(sessionId) && isValidId(participantId) &&
           isValidLoungeParticipant(incoming()) &&
           incoming().participantUid == participantId &&
           incoming().sessionId == sessionId &&
           incoming().createdAt == request.time &&
           incoming().updatedAt == request.time &&
-          get(/databases/$(database)/documents/loungeSessions/$(sessionId)).data.workspaceOwnerUid == request.auth.uid;
-        allow update: if isSignedIn() && isValidId(sessionId) && isValidId(participantId) &&
+          isAuthorizedWorkspace(get(/databases/$(database)/documents/loungeSessions/$(sessionId)).data.workspaceOwnerUid);
+        allow update: if isValidId(sessionId) && isValidId(participantId) &&
           isValidLoungeParticipant(incoming()) &&
           incoming().participantUid == existing().participantUid &&
           incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
           incoming().createdAt == existing().createdAt &&
           incoming().updatedAt == request.time &&
-          get(/databases/$(database)/documents/loungeSessions/$(sessionId)).data.workspaceOwnerUid == request.auth.uid && (
-            isAdmin() ||
-            (existing().workspaceOwnerUid == request.auth.uid &&
-              incoming().diff(existing()).affectedKeys().hasOnly([
-                'anonymousAlias', 'presenceStatus', 'aliasChangeCount',
-                'lastHeartbeatAt', 'aliasChangedAt', 'updatedAt'
-              ])
-            )
-          );
-        allow delete: if isSignedIn() && isValidId(sessionId) && isValidId(participantId) &&
-          get(/databases/$(database)/documents/loungeSessions/$(sessionId)).data.workspaceOwnerUid == request.auth.uid;
+          isAuthorizedWorkspace(get(/databases/$(database)/documents/loungeSessions/$(sessionId)).data.workspaceOwnerUid) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'anonymousAlias', 'presenceStatus', 'aliasChangeCount',
+            'lastHeartbeatAt', 'aliasChangedAt', 'updatedAt'
+          ]);
+        allow delete: if isValidId(sessionId) && isValidId(participantId) &&
+          isAuthorizedWorkspace(get(/databases/$(database)/documents/loungeSessions/$(sessionId)).data.workspaceOwnerUid);
       }
     }
 
     match /loungeMessages/{messageId} {
-      allow get: if isSignedIn() && isValidId(messageId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && existing().workspaceOwnerUid == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(messageId) && isValidLoungeMessage(incoming()) && incoming().messageId == messageId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isSignedIn() && isValidId(messageId) && isValidLoungeMessage(incoming()) &&
+      allow get: if isValidId(messageId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow create: if isValidId(messageId) && isValidLoungeMessage(incoming()) && incoming().messageId == messageId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(messageId) && isValidLoungeMessage(incoming()) &&
         incoming().messageId == existing().messageId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (existing().workspaceOwnerUid == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['moderationStatus', 'hiddenAt', 'hiddenBy', 'updatedAt'])
-          )
-        );
-      allow delete: if isSignedIn() && isValidId(messageId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
+        incoming().updatedAt == request.time &&
+        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['moderationStatus', 'hiddenAt', 'hiddenBy', 'updatedAt']);
+      allow delete: if isValidId(messageId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
     match /reports/{reportId} {
-      allow get: if isSignedIn() && isValidId(reportId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && existing().workspaceOwnerUid == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(reportId) && isValidReport(incoming()) && incoming().reportId == reportId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isSignedIn() && isValidId(reportId) && isValidReport(incoming()) &&
+      allow get: if isValidId(reportId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow create: if isValidId(reportId) && isValidReport(incoming()) && incoming().reportId == reportId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(reportId) && isValidReport(incoming()) &&
         incoming().reportId == existing().reportId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (existing().workspaceOwnerUid == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAt', 'reviewNote', 'updatedAt'])
-          )
-        );
-      allow delete: if isAdmin() && isValidId(reportId);
+        incoming().updatedAt == request.time &&
+        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAt', 'reviewNote', 'updatedAt']);
+      allow delete: if false;
     }
 
     match /auditLogs/{logId} {
-      allow get: if isSignedIn() && isValidId(logId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && existing().workspaceOwnerUid == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(logId) && isValidAuditLog(incoming()) && incoming().logId == logId && incoming().createdAt == request.time;
+      allow get: if isValidId(logId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow create: if isValidId(logId) && isValidAuditLog(incoming()) && incoming().logId == logId && incoming().createdAt == request.time;
       allow update, delete: if false;
     }
 
     match /appSettings/{settingId} {
-      allow get: if isSignedIn() && isValidId(settingId) && (existing().workspaceOwnerUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && existing().workspaceOwnerUid == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(settingId) && isValidAppSetting(incoming()) && incoming().settingId == settingId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isSignedIn() && isValidId(settingId) && isValidAppSetting(incoming()) &&
+      allow get: if isValidId(settingId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow create: if isValidId(settingId) && isValidAppSetting(incoming()) && incoming().settingId == settingId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(settingId) && isValidAppSetting(incoming()) &&
         incoming().settingId == existing().settingId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (existing().workspaceOwnerUid == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly([
-              'loungeRules', 'profilePolicy', 'letterModerationPolicy',
-              'dataRetentionPolicy', 'identityRevealPolicy',
-              'allowPhotoEvidence', 'updatedBy', 'updatedAt'
-            ])
-          )
-        );
+        incoming().updatedAt == request.time &&
+        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'loungeRules', 'profilePolicy', 'letterModerationPolicy',
+          'dataRetentionPolicy', 'identityRevealPolicy',
+          'allowPhotoEvidence', 'updatedBy', 'updatedAt'
+        ]);
       allow delete: if false;
     }
   }

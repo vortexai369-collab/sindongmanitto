@@ -1,11 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  onAuthStateChanged,
-  signInWithPopup,
-  signOut,
-  User as FirebaseUser,
-} from 'firebase/auth';
-import {
   collection,
   query,
   where,
@@ -30,16 +24,14 @@ import {
   Shuffle,
   ShieldAlert,
   BarChart3,
-  HeartHandshake,
   PanelRightClose,
   PanelRightOpen,
   Lock,
   KeyRound,
+  CheckCircle2,
 } from 'lucide-react';
 import {
-  auth,
   db,
-  googleProvider,
   handleFirestoreError,
   OperationType,
 } from './firebase';
@@ -66,29 +58,43 @@ import {
 import {
   ensureWorkspaceSeeded,
   hashPassword,
+  recordAuditLog,
 } from './services/manittoServerEngine';
 import { AvatarIllustration } from './components/AvatarIllustration';
 import { StudentViews } from './components/StudentViews';
 import { TeacherViews } from './components/TeacherViews';
 import { RightSummaryPanel } from './components/RightSummaryPanel';
 
+const WORKSPACE_ID = 'shindong_5_2_ws';
+const SESSION_STORAGE_KEY = 'shindong_manitto_logged_uid';
+
 export default function App() {
-  const [authUser, setAuthUser] = useState<FirebaseUser | null>(null);
-  const [authReady, setAuthReady] = useState(false);
-  const [seeding, setSeeding] = useState(false);
+  const [seeding, setSeeding] = useState(true);
 
-  // Login Screen State (Supports Teacher Login & Student ID/Password Adapter)
+  // Login Screen State (Student Roster Click + Password OR Teacher Admin ID + Password)
   const [loginRoleTab, setLoginRoleTab] = useState<'student' | 'teacher'>('student');
-  const [loginStudentId, setLoginStudentId] = useState('shindong01');
-  const [loginPassword, setLoginPassword] = useState('1234');
+  const [selectedStudentUidForLogin, setSelectedStudentUidForLogin] = useState<string>('');
+  const [teacherLoginIdInput, setTeacherLoginIdInput] = useState('teacher');
+  const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
-  const [pendingLoginTargetId, setPendingLoginTargetId] = useState<string | null>(null);
 
-  // Active Profile inside the Classroom Workspace
-  const [activeProfileUid, setActiveProfileUid] = useState<string>('');
+  // Logged-in User UID (persisted in sessionStorage for refresh convenience, cleared on logout)
+  const [loggedInUid, setLoggedInUid] = useState<string>(() => {
+    return sessionStorage.getItem(SESSION_STORAGE_KEY) || '';
+  });
+
+  // Navigation & UI State
   const [studentTab, setStudentTab] = useState<StudentNavTab>('home');
   const [teacherTab, setTeacherTab] = useState<TeacherNavTab>('dashboard');
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
+
+  // Password Change Modal State (Accessible from header for both Teacher & Student)
+  const [pwModalOpen, setPwModalOpen] = useState(false);
+  const [modalAdminId, setModalAdminId] = useState('');
+  const [modalCurrentPw, setModalCurrentPw] = useState('');
+  const [modalNewPw, setModalNewPw] = useState('');
+  const [modalConfirmPw, setModalConfirmPw] = useState('');
+  const [modalSaving, setModalSaving] = useState(false);
 
   // Toast Notification
   const [toast, setToast] = useState<{
@@ -124,29 +130,27 @@ export default function App() {
     }, 4000);
   };
 
-  // 1. Firebase Auth State Listener & Initial Classroom Seed
+  // 1. Seed Initial Classroom Data in Cloud Firestore on Boot (No Google Popup needed)
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (user) => {
-      setAuthUser(user);
-      if (user) {
-        setSeeding(true);
-        try {
-          await ensureWorkspaceSeeded(user.uid);
-        } catch (err) {
-          console.error('Seed error:', err);
-        } finally {
-          setSeeding(false);
-        }
+    let mounted = true;
+    async function initWorkspace() {
+      try {
+        await ensureWorkspaceSeeded(WORKSPACE_ID);
+      } catch (err) {
+        console.error('Seed error:', err);
+      } finally {
+        if (mounted) setSeeding(false);
       }
-      setAuthReady(true);
-    });
-    return () => unsub();
+    }
+    initWorkspace();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
-  // 2. Real-time Firestore Listeners (Scoped strictly by workspaceOwnerUid == authUser.uid)
+  // 2. Real-time Firestore Listeners (Scoped strictly by workspaceOwnerUid == WORKSPACE_ID)
   useEffect(() => {
-    if (!authReady || !authUser || seeding) return;
-    const ownerUid = authUser.uid;
+    if (seeding) return;
 
     const unsubs: Array<() => void> = [];
 
@@ -156,7 +160,7 @@ export default function App() {
     ) => {
       const q = query(
         collection(db, colName),
-        where('workspaceOwnerUid', '==', ownerUid)
+        where('workspaceOwnerUid', '==', WORKSPACE_ID)
       );
       const u = onSnapshot(
         q,
@@ -188,16 +192,16 @@ export default function App() {
     return () => {
       unsubs.forEach((fn) => fn());
     };
-  }, [authReady, authUser, seeding]);
+  }, [seeding]);
 
   // 3. Subscribe to Lounge Participants subcollection for the active lounge session
   const currentLoungeSession = loungeSessions[0] || null;
   useEffect(() => {
-    if (!authReady || !authUser || !currentLoungeSession) return;
+    if (seeding || !currentLoungeSession) return;
     const subPath = `loungeSessions/${currentLoungeSession.sessionId}/participants`;
     const q = query(
       collection(db, 'loungeSessions', currentLoungeSession.sessionId, 'participants'),
-      where('workspaceOwnerUid', '==', authUser.uid)
+      where('workspaceOwnerUid', '==', WORKSPACE_ID)
     );
     const unsub = onSnapshot(
       q,
@@ -207,40 +211,32 @@ export default function App() {
       (err) => handleFirestoreError(err, OperationType.LIST, subPath)
     );
     return () => unsub();
-  }, [authReady, authUser, currentLoungeSession?.sessionId]);
+  }, [seeding, currentLoungeSession?.sessionId]);
 
-  // 4. Resolve active profile after login
-  useEffect(() => {
-    if (allUsers.length === 0) return;
-
-    if (pendingLoginTargetId) {
-      const target = allUsers.find((u) => u.studentLoginId === pendingLoginTargetId);
-      if (target) {
-        setActiveProfileUid(target.uid);
-        setPendingLoginTargetId(null);
-        return;
-      }
-    }
-
-    if (!activeProfileUid || !allUsers.some((u) => u.uid === activeProfileUid)) {
-      const firstStudent =
-        allUsers.find((u) => u.studentLoginId === 'shindong01') ||
-        allUsers.find((u) => u.role === 'student') ||
-        allUsers[0];
-      if (firstStudent) {
-        setActiveProfileUid(firstStudent.uid);
-      }
-    }
-  }, [allUsers, activeProfileUid, pendingLoginTargetId]);
-
-  const activeUser = useMemo(
-    () => allUsers.find((u) => u.uid === activeProfileUid) || allUsers[0] || null,
-    [allUsers, activeProfileUid]
+  // Roster of Students registered by the Teacher
+  const rosterStudents = useMemo(
+    () =>
+      allUsers
+        .filter((u) => u.role === 'student')
+        .sort((a, b) => a.studentLoginId.localeCompare(b.studentLoginId)),
+    [allUsers]
   );
 
-  // 5. Real-time Session Heartbeat (Distinguishes login vs live online presence)
+  // Default select first student on login screen roster if none selected
   useEffect(() => {
-    if (!authUser || !activeUser) return;
+    if (!selectedStudentUidForLogin && rosterStudents.length > 0) {
+      setSelectedStudentUidForLogin(rosterStudents[0].uid);
+    }
+  }, [rosterStudents, selectedStudentUidForLogin]);
+
+  const activeUser = useMemo(
+    () => allUsers.find((u) => u.uid === loggedInUid) || null,
+    [allUsers, loggedInUid]
+  );
+
+  // 4. Real-time Session Heartbeat for Logged-In User
+  useEffect(() => {
+    if (!activeUser) return;
     const sendBeat = async () => {
       try {
         await updateDoc(doc(db, 'users', activeUser.uid), {
@@ -249,72 +245,94 @@ export default function App() {
           updatedAt: serverTimestamp(),
         });
       } catch {
-        // Ignore transient network beat errors
+        // Ignore transient beat errors
       }
     };
     sendBeat();
     const timer = setInterval(sendBeat, 60 * 1000);
     return () => clearInterval(timer);
-  }, [authUser, activeUser?.uid]);
+  }, [activeUser?.uid]);
 
-  // Login Handlers
-  const handleGoogleLogin = async (targetLoginId?: string) => {
-    setLoginError('');
-    try {
-      if (targetLoginId) {
-        setPendingLoginTargetId(targetLoginId);
-      }
-      await signInWithPopup(auth, googleProvider);
-    } catch (err) {
-      setLoginError(
-        err instanceof Error
-          ? `Google 로그인 창이 닫혔거나 취소되었습니다: ${err.message}`
-          : '로그인 중 오류가 발생했습니다.'
-      );
-    }
-  };
-
-  const handleCredentialLogin = async (e: React.FormEvent) => {
+  // 5. Handle Student Roster Login OR Teacher Admin Login (No Google Popup!)
+  const handleDirectLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
-    const trimmedId = loginStudentId.trim();
+
     const trimmedPw = loginPassword.trim();
-
-    if (!trimmedId || !trimmedPw) {
-      setLoginError('아이디와 비밀번호를 모두 입력해 주세요.');
+    if (!trimmedPw) {
+      setLoginError('비밀번호를 입력해 주세요.');
       return;
     }
 
-    // If not yet authenticated with Firebase Auth, sign in via Google Popup first to establish verified token
-    if (!authUser) {
-      await handleGoogleLogin(trimmedId);
-      return;
-    }
+    if (loginRoleTab === 'student') {
+      const targetStudent = rosterStudents.find(
+        (s) => s.uid === selectedStudentUidForLogin
+      );
+      if (!targetStudent) {
+        setLoginError('먼저 명단에서 자신의 이름을 클릭해 선택해 주세요.');
+        return;
+      }
+      if (targetStudent.accountStatus === 'inactive') {
+        setLoginError('비활성화된 학생 계정입니다. 담임선생님께 계정 복구를 요청해 주세요.');
+        return;
+      }
 
-    const foundUser = allUsers.find((u) => u.studentLoginId === trimmedId);
-    if (!foundUser) {
-      setLoginError('존재하지 않는 아이디입니다. 담임선생님께 발급받은 아이디를 확인해 주세요.');
-      return;
-    }
-    if (foundUser.accountStatus === 'inactive') {
-      setLoginError('비활성화된 계정입니다. 담임선생님께 계정 복구를 요청해 주세요.');
-      return;
-    }
+      const inputHash = await hashPassword(trimmedPw);
+      if (targetStudent.passwordHash !== inputHash) {
+        setLoginError(
+          `${targetStudent.displayName} 학생의 비밀번호가 일치하지 않습니다. (비밀번호를 잊었다면 선생님께 초기화를 요청하세요)`
+        );
+        return;
+      }
 
-    const inputHash = await hashPassword(trimmedPw);
-    if (foundUser.passwordHash !== inputHash) {
-      setLoginError('비밀번호가 일치하지 않습니다. (초기 비밀번호는 1234 입니다)');
-      return;
-    }
+      await updateDoc(doc(db, 'users', targetStudent.uid), {
+        lastLoginAt: new Date().toISOString(),
+        lastHeartbeatAt: new Date().toISOString(),
+        isOnlineSession: true,
+        updatedAt: serverTimestamp(),
+      });
 
-    await updateDoc(doc(db, 'users', foundUser.uid), {
-      lastLoginAt: new Date().toISOString(),
-      lastHeartbeatAt: new Date().toISOString(),
-      isOnlineSession: true,
-      updatedAt: serverTimestamp(),
-    });
-    setActiveProfileUid(foundUser.uid);
-    showToast(`${foundUser.displayName}님, 전주신동초 마니또에 오신 것을 환영해요!`, 'success');
+      sessionStorage.setItem(SESSION_STORAGE_KEY, targetStudent.uid);
+      setLoggedInUid(targetStudent.uid);
+      setLoginPassword('');
+      setStudentTab('home');
+      showToast(
+        `${targetStudent.displayName} 친구, 반가워요! 오늘도 따뜻한 친절을 실천해 볼까요?`,
+        'success'
+      );
+    } else {
+      const trimmedId = teacherLoginIdInput.trim();
+      const teacherAccount = allUsers.find(
+        (u) => u.role === 'teacher' && u.studentLoginId === trimmedId
+      );
+
+      if (!teacherAccount) {
+        setLoginError('교사 관리자 아이디가 일치하지 않습니다.');
+        return;
+      }
+
+      const inputHash = await hashPassword(trimmedPw);
+      if (teacherAccount.passwordHash !== inputHash) {
+        setLoginError('교사 관리자 비밀번호가 일치하지 않습니다.');
+        return;
+      }
+
+      await updateDoc(doc(db, 'users', teacherAccount.uid), {
+        lastLoginAt: new Date().toISOString(),
+        lastHeartbeatAt: new Date().toISOString(),
+        isOnlineSession: true,
+        updatedAt: serverTimestamp(),
+      });
+
+      sessionStorage.setItem(SESSION_STORAGE_KEY, teacherAccount.uid);
+      setLoggedInUid(teacherAccount.uid);
+      setLoginPassword('');
+      setTeacherTab('dashboard');
+      showToast(
+        `${teacherAccount.displayName}님, 교사 관리자 대시보드에 로그인되었습니다.`,
+        'success'
+      );
+    }
   };
 
   const handleLogout = async () => {
@@ -328,12 +346,92 @@ export default function App() {
         // Ignore
       }
     }
-    await signOut(auth);
-    setActiveProfileUid('');
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    setLoggedInUid('');
+    setLoginPassword('');
+    setLoginError('');
+  };
+
+  // Open Password Change Modal
+  const openPasswordModal = () => {
+    if (!activeUser) return;
+    setModalAdminId(activeUser.studentLoginId);
+    setModalCurrentPw('');
+    setModalNewPw('');
+    setModalConfirmPw('');
+    setPwModalOpen(true);
+  };
+
+  // Submit Password Change from Modal (Works for both Student and Teacher)
+  const handlePasswordChangeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeUser || modalSaving) return;
+
+    if (modalNewPw.trim().length < 4) {
+      showToast('새 비밀번호는 4자리 이상으로 입력해 주세요.', 'error');
+      return;
+    }
+    if (modalNewPw.trim() !== modalConfirmPw.trim()) {
+      showToast('새 비밀번호와 비밀번호 확인이 일치하지 않습니다.', 'error');
+      return;
+    }
+
+    setModalSaving(true);
+    try {
+      const curHash = await hashPassword(modalCurrentPw.trim());
+      if (curHash !== activeUser.passwordHash) {
+        showToast('현재 비밀번호가 일치하지 않습니다.', 'error');
+        setModalSaving(false);
+        return;
+      }
+
+      const nextHash = await hashPassword(modalNewPw.trim());
+      const updates: Record<string, unknown> = {
+        passwordHash: nextHash,
+        updatedAt: serverTimestamp(),
+      };
+
+      if (activeUser.role === 'teacher') {
+        const cleanAdminId = modalAdminId.trim().replace(/[^a-zA-Z0-9_-]/g, '');
+        if (cleanAdminId.length < 3) {
+          showToast('관리자 아이디는 영문/숫자 3자 이상이어야 합니다.', 'error');
+          setModalSaving(false);
+          return;
+        }
+        updates.studentLoginId = cleanAdminId;
+      }
+
+      await updateDoc(doc(db, 'users', activeUser.uid), updates);
+
+      if (activeUser.role === 'teacher') {
+        await recordAuditLog({
+          workspaceOwnerUid: WORKSPACE_ID,
+          actorUid: activeUser.uid,
+          actorName: activeUser.displayName,
+          action: 'TEACHER_PASSWORD_CHANGED',
+          targetType: 'user',
+          targetId: activeUser.uid,
+          reason: '교사 관리자 아이디/비밀번호 보안 변경',
+          metadataSummary: `관리자 아이디: ${updates.studentLoginId || activeUser.studentLoginId}`,
+        });
+      }
+
+      setPwModalOpen(false);
+      showToast(
+        activeUser.role === 'teacher'
+          ? '교사 관리자 아이디와 비밀번호가 안전하게 변경되었습니다!'
+          : '나의 비밀번호가 안전하게 변경되었어요!',
+        'success'
+      );
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `users/${activeUser.uid}`);
+    } finally {
+      setModalSaving(false);
+    }
   };
 
   // Loading Screen
-  if (!authReady || seeding) {
+  if (seeding || allUsers.length === 0) {
     return (
       <div className="min-h-screen bg-[#E2F2EA] flex items-center justify-center p-6">
         <div className="bg-[#FBF9F5] rounded-[36px] p-10 max-w-md w-full text-center shadow-sm space-y-4">
@@ -342,22 +440,28 @@ export default function App() {
           </div>
           <h1 className="text-xl font-extrabold text-[#141413]">전주신동초 마니또</h1>
           <p className="text-xs text-[#6B665E]">
-            안전한 학급 데이터베이스와 마니또 공간을 불러오고 있어요...
+            우리 반 명단과 마니또 활동 데이터를 불러오고 있어요...
           </p>
         </div>
       </div>
     );
   }
 
-  // Unauthenticated Login Page (Page 1 of 22)
-  if (!authUser || !activeUser) {
+  // ============================================================================
+  // LOGIN SCREEN (No Google Popup — Direct Student Roster Selection or Teacher Login)
+  // ============================================================================
+  if (!activeUser) {
+    const selectedStudentObj = rosterStudents.find(
+      (s) => s.uid === selectedStudentUidForLogin
+    );
+
     return (
       <div className="min-h-screen bg-[#E2F2EA] flex items-center justify-center p-4 sm:p-8">
-        <div className="bg-[#FBF9F5] rounded-[40px] max-w-4xl w-full p-6 sm:p-10 shadow-sm grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+        <div className="bg-[#FBF9F5] rounded-[40px] max-w-5xl w-full p-6 sm:p-10 shadow-sm grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           {/* Left Intro Column */}
-          <div className="lg:col-span-6 space-y-5">
+          <div className="lg:col-span-5 space-y-5 lg:sticky lg:top-8">
             <div className="inline-flex items-center gap-2 bg-[#F3EFEA] rounded-2xl px-3.5 py-2 text-xs font-bold text-[#141413]">
-              <span>🏫 전주신동초등학교 공식 학급 활동 플랫폼</span>
+              <span>🏫 전주신동초등학교 5학년 2반</span>
             </div>
 
             <h1 className="text-3xl sm:text-4xl font-extrabold text-[#141413] tracking-tight leading-tight">
@@ -367,10 +471,10 @@ export default function App() {
             </h1>
 
             <p className="text-xs sm:text-sm text-[#5C574F] leading-relaxed">
-              <strong>「전주신동초 마니또」</strong>는 친구의 장점을 발견하고, 작은 친절 미션 20개를 실천하며, 익명 편지함과 실시간 학급 라운지로 마음을 나누는 안전한 공간입니다.
+              <strong>「전주신동초 마니또」</strong>에 오신 것을 환영해요! 학생은 오른쪽 우리 반 명단에서 자신의 이름을 클릭하고 비밀번호를 입력해 입장하세요.
             </p>
 
-            <div className="grid grid-cols-2 gap-3 pt-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
               <div className="bg-[#F6D4D2] rounded-2xl p-4">
                 <span className="text-lg">🌱</span>
                 <h3 className="text-xs font-extrabold text-[#141413] mt-1">
@@ -393,34 +497,35 @@ export default function App() {
           </div>
 
           {/* Right Login Card */}
-          <div className="lg:col-span-6 bg-[#F3EFEA] rounded-[32px] p-6 sm:p-8 space-y-5">
+          <div className="lg:col-span-7 bg-[#F3EFEA] rounded-[32px] p-6 sm:p-8 space-y-5">
+            {/* Role Tabs */}
             <div className="flex items-center gap-2 bg-white p-1.5 rounded-2xl">
               <button
                 type="button"
                 onClick={() => {
                   setLoginRoleTab('student');
-                  setLoginStudentId('shindong01');
-                  setLoginPassword('1234');
+                  setLoginError('');
+                  setLoginPassword('');
                 }}
                 className={`flex-1 py-2.5 rounded-xl text-xs font-extrabold cursor-pointer transition-colors ${
                   loginRoleTab === 'student'
                     ? 'bg-[#141413] text-white'
-                    : 'text-[#5C574F]'
+                    : 'text-[#5C574F] hover:text-[#141413]'
                 }`}
               >
-                🎒 학생 로그인
+                🎒 학생 명단에서 선택하여 입장
               </button>
               <button
                 type="button"
                 onClick={() => {
                   setLoginRoleTab('teacher');
-                  setLoginStudentId('teacher');
-                  setLoginPassword('1234');
+                  setLoginError('');
+                  setLoginPassword('');
                 }}
                 className={`flex-1 py-2.5 rounded-xl text-xs font-extrabold cursor-pointer transition-colors ${
                   loginRoleTab === 'teacher'
                     ? 'bg-[#141413] text-white'
-                    : 'text-[#5C574F]'
+                    : 'text-[#5C574F] hover:text-[#141413]'
                 }`}
               >
                 👩‍🏫 교사 관리자 로그인
@@ -433,82 +538,143 @@ export default function App() {
               </div>
             )}
 
-            <form onSubmit={handleCredentialLogin} className="space-y-3.5">
-              <div>
-                <label className="block text-xs font-bold text-[#141413] mb-1">
-                  {loginRoleTab === 'student'
-                    ? '선생님이 발급한 학생 아이디'
-                    : '교사 관리자 아이디'}
-                </label>
-                <input
-                  type="text"
-                  value={loginStudentId}
-                  onChange={(e) => setLoginStudentId(e.target.value)}
-                  placeholder={loginRoleTab === 'student' ? 'shindong01' : 'teacher'}
-                  className="w-full rounded-xl bg-white px-4 py-2.5 text-sm text-[#141413] font-semibold"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-[#141413] mb-1">
-                  비밀번호 (초기 비밀번호: 1234)
-                </label>
-                <input
-                  type="password"
-                  value={loginPassword}
-                  onChange={(e) => setLoginPassword(e.target.value)}
-                  className="w-full rounded-xl bg-white px-4 py-2.5 text-sm text-[#141413]"
-                />
-              </div>
-
-              {/* Quick Demo Account Selector */}
-              {loginRoleTab === 'student' && (
+            {loginRoleTab === 'student' ? (
+              <form onSubmit={handleDirectLogin} className="space-y-5">
                 <div>
-                  <span className="block text-[11px] font-bold text-[#6B665E] mb-1.5">
-                    빠른 학생 계정 선택 (클릭 시 아이디 자동 입력):
-                  </span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {[
-                      { id: 'shindong01', name: '김하늘' },
-                      { id: 'shindong02', name: '이준서' },
-                      { id: 'shindong03', name: '박소율' },
-                      { id: 'shindong04', name: '최도윤' },
-                      { id: 'shindong05', name: '정지우' },
-                      { id: 'shindong06', name: '강시우' },
-                    ].map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => {
-                          setLoginStudentId(s.id);
-                          setLoginPassword('1234');
-                        }}
-                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
-                          loginStudentId === s.id
-                            ? 'bg-[#141413] text-white'
-                            : 'bg-white text-[#141413]'
-                        }`}
-                      >
-                        {s.name} ({s.id})
-                      </button>
-                    ))}
+                  <div className="flex items-center justify-between mb-2.5">
+                    <label className="text-xs font-extrabold text-[#141413]">
+                      1. 선생님이 등록한 우리 반 명단에서 내 이름을 클릭하세요 ({rosterStudents.length}명)
+                    </label>
+                    <span className="text-[11px] text-[#6B665E]">
+                      클릭하여 선택
+                    </span>
+                  </div>
+
+                  {/* Interactive Student Roster Grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-64 overflow-y-auto pr-1">
+                    {rosterStudents.map((stu) => {
+                      const isSelected = stu.uid === selectedStudentUidForLogin;
+                      const isInactive = stu.accountStatus === 'inactive';
+                      return (
+                        <button
+                          key={stu.uid}
+                          type="button"
+                          disabled={isInactive}
+                          onClick={() => {
+                            setSelectedStudentUidForLogin(stu.uid);
+                            setLoginError('');
+                          }}
+                          className={`p-3 rounded-2xl text-left flex items-center gap-2.5 transition-all cursor-pointer border-2 ${
+                            isInactive
+                              ? 'bg-[#E6E1D6] opacity-50 border-transparent cursor-not-allowed'
+                              : isSelected
+                              ? 'bg-[#141413] text-white border-[#141413] shadow-xs'
+                              : 'bg-white text-[#141413] border-transparent hover:border-[#D6D1C7]'
+                          }`}
+                        >
+                          <AvatarIllustration avatarId={stu.avatarId} size="sm" />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-extrabold truncate">
+                              {stu.displayName}
+                            </p>
+                            <p
+                              className={`text-[10px] truncate ${
+                                isSelected ? 'text-white/80' : 'text-[#6B665E]'
+                              }`}
+                            >
+                              {isInactive ? '비활성 계정' : stu.studentLoginId}
+                            </p>
+                          </div>
+                          {isSelected && (
+                            <CheckCircle2 className="w-4 h-4 text-[#C6F0DF] shrink-0" />
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
-              )}
 
-              <button
-                type="submit"
-                className="w-full py-3.5 rounded-2xl bg-[#141413] text-white text-xs font-extrabold hover:bg-[#2C2A27] cursor-pointer shadow-xs"
-              >
-                {loginRoleTab === 'student'
-                  ? '학생 계정으로 로그인 시작하기 (Google 보안 인증 연동)'
-                  : '교사 관리자로 로그인 시작하기 (Google 보안 인증 연동)'}
-              </button>
-            </form>
+                {/* Selected Student Password Input */}
+                <div className="bg-white rounded-2xl p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-extrabold text-[#141413]">
+                      2.{' '}
+                      {selectedStudentObj
+                        ? `[${selectedStudentObj.displayName}] 학생의 비밀번호 입력`
+                        : '비밀번호 입력'}
+                    </label>
+                    <span className="text-[11px] font-semibold text-[#6B665E]">
+                      초기 비밀번호: 1234
+                    </span>
+                  </div>
 
-            <p className="text-[11px] text-[#6B665E] leading-relaxed text-center">
-              비밀번호를 잊어버린 학생은 담임선생님께 요청하면 교사 대시보드에서 즉시 초기 비밀번호(1234)로 안전하게 복구할 수 있습니다.
-            </p>
+                  <div className="flex flex-col sm:flex-row gap-2.5">
+                    <input
+                      type="password"
+                      value={loginPassword}
+                      onChange={(e) => setLoginPassword(e.target.value)}
+                      placeholder="비밀번호를 입력하세요 (초기값: 1234)"
+                      required
+                      className="flex-1 rounded-xl bg-[#F3EFEA] px-4 py-3 text-sm text-[#141413] font-bold focus:outline-none focus:ring-2 focus:ring-[#141413]"
+                    />
+                    <button
+                      type="submit"
+                      className="px-6 py-3 rounded-xl bg-[#141413] text-white text-xs font-extrabold hover:bg-[#2C2A27] cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      {selectedStudentObj
+                        ? `${selectedStudentObj.displayName}(으)로 입장하기 →`
+                        : '입장하기 →'}
+                    </button>
+                  </div>
+
+                  <p className="text-[11px] text-[#6B665E]">
+                    💡 입장한 뒤 상단의 <strong>[🔒 비밀번호 변경]</strong> 또는 <strong>[설정]</strong> 메뉴에서 나만의 비밀번호로 직접 바꿀 수 있어요!
+                  </p>
+                </div>
+              </form>
+            ) : (
+              /* Teacher Admin Login Form */
+              <form onSubmit={handleDirectLogin} className="space-y-4">
+                <div className="bg-[#E0F2FE] rounded-2xl p-4 text-xs text-[#0369A1] font-semibold leading-relaxed">
+                  🔒 교사 전용 관리 공간입니다. 관리자 아이디와 비밀번호를 입력해 주세요. 로그인 후 다른 사람이 들어오지 못하도록 관리자 아이디와 비밀번호를 변경할 수 있습니다.
+                </div>
+
+                <div>
+                  <label className="block text-xs font-extrabold text-[#141413] mb-1.5">
+                    교사 관리자 아이디 (초기 아이디: teacher)
+                  </label>
+                  <input
+                    type="text"
+                    value={teacherLoginIdInput}
+                    onChange={(e) => setTeacherLoginIdInput(e.target.value)}
+                    placeholder="관리자 아이디 입력"
+                    required
+                    className="w-full rounded-xl bg-white px-4 py-3 text-sm text-[#141413] font-bold focus:outline-none focus:ring-2 focus:ring-[#141413]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-extrabold text-[#141413] mb-1.5">
+                    교사 관리자 비밀번호 (초기 비밀번호: 1234)
+                  </label>
+                  <input
+                    type="password"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    placeholder="관리자 비밀번호 입력"
+                    required
+                    className="w-full rounded-xl bg-white px-4 py-3 text-sm text-[#141413] font-bold focus:outline-none focus:ring-2 focus:ring-[#141413]"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3.5 rounded-2xl bg-[#141413] text-white text-xs font-extrabold hover:bg-[#2C2A27] cursor-pointer shadow-xs"
+                >
+                  교사 관리자 대시보드 입장하기 →
+                </button>
+              </form>
+            )}
           </div>
         </div>
       </div>
@@ -541,7 +707,7 @@ export default function App() {
       ).length,
     },
     { id: 'lounge', label: '익명 라운지', icon: MessageSquareHeart },
-    { id: 'settings', label: '설정', icon: Settings },
+    { id: 'settings', label: '설정·비밀번호', icon: Settings },
   ];
 
   const teacherNavItems: Array<{
@@ -551,7 +717,7 @@ export default function App() {
     badge?: number;
   }> = [
     { id: 'dashboard', label: '교사 홈', icon: ShieldCheck },
-    { id: 'students', label: '학생 계정 관리', icon: Users },
+    { id: 'students', label: '학생 명단·계정', icon: Users },
     { id: 'activities', label: '학생별 활동 기록', icon: FileCheck },
     {
       id: 'missions',
@@ -568,16 +734,16 @@ export default function App() {
     },
     { id: 'lounge', label: '라운지 운영', icon: MessageSquareHeart },
     { id: 'stats', label: '학급 통계', icon: BarChart3 },
-    { id: 'settings', label: '설정·감사로그', icon: Settings },
+    { id: 'settings', label: '보안·감사로그', icon: Settings },
   ];
 
   return (
     <div className="min-h-screen bg-[#E2F2EA] p-2 sm:p-4 lg:p-6">
-      {/* Main Outer App Container (Matches Reference Image Ivory Canvas Frame) */}
+      {/* Main Outer App Container */}
       <div className="max-w-[1440px] mx-auto bg-[#FBF9F5] rounded-[36px] shadow-xs border border-white/80 p-4 sm:p-6">
-        {/* Top Role & Account Switcher Bar (Follows 3-Zone Top Bar Contract) */}
+        {/* Top Bar (3-Zone Contract: Brand Wordmark — Logged-in User Info — Password Change & Logout Actions) */}
         <header className="flex items-center justify-between gap-4 pb-4 mb-5 border-b border-[#EFECE6]">
-          {/* Zone 1: Single Brand Wordmark */}
+          {/* Zone 1: Brand Wordmark */}
           <div className="flex items-center gap-2.5 shrink-0">
             <div className="w-9 h-9 rounded-xl bg-[#141413] text-white flex items-center justify-center font-extrabold text-sm">
               신
@@ -587,32 +753,25 @@ export default function App() {
             </span>
           </div>
 
-          {/* Zone 2: Quick Classroom Account Switcher (Allows testing Teacher & all 6 Students seamlessly) */}
-          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-            <span className="text-xs font-bold text-[#6B665E] whitespace-nowrap shrink-0 hidden md:inline">
-              현재 접속 계정 전환:
+          {/* Zone 2: Current Authenticated Identity */}
+          <div className="hidden md:flex items-center gap-2 text-xs font-bold text-[#4A463F]">
+            <span>
+              {isTeacherMode
+                ? `👩‍🏫 교사 관리자 모드 (${activeUser.displayName} · ID: ${activeUser.studentLoginId})`
+                : `🎒 5학년 2반 ${activeUser.displayName} 학생`}
             </span>
-            <select
-              value={activeUser.uid}
-              onChange={(e) => setActiveProfileUid(e.target.value)}
-              aria-label="현재 접속 계정 선택"
-              className="rounded-xl bg-[#F3EFEA] px-3 py-1.5 text-xs font-bold text-[#141413] cursor-pointer"
-            >
-              {allUsers
-                .slice()
-                .sort((a, b) => (a.role === 'teacher' ? -1 : b.role === 'teacher' ? 1 : a.displayName.localeCompare(b.displayName)))
-                .map((u) => (
-                  <option key={u.uid} value={u.uid}>
-                    {u.role === 'teacher'
-                      ? `👩‍🏫 [교사 관리자] ${u.displayName}`
-                      : `🎒 [학생] ${u.displayName} (${u.studentLoginId})`}
-                  </option>
-                ))}
-            </select>
           </div>
 
-          {/* Zone 3: Primary Action (Toggle Right Panel / Logout) */}
+          {/* Zone 3: Password Change & Right Panel Toggle & Logout */}
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={openPasswordModal}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[#C6F0DF] text-[#065F46] text-xs font-extrabold hover:bg-[#B2E8D2] cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+              <span>{isTeacherMode ? '관리자 비밀번호 변경' : '비밀번호 변경'}</span>
+            </button>
+
             <button
               onClick={() => setRightPanelOpen((v) => !v)}
               className="hidden xl:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#F3EFEA] text-xs font-bold text-[#141413] hover:bg-[#E7E2D8] cursor-pointer whitespace-nowrap shrink-0"
@@ -661,9 +820,9 @@ export default function App() {
           </div>
         )}
 
-        {/* 3-Column Desktop Layout (Left Vertical Nav Rail + Center Main + Right Widget Panel) */}
+        {/* 3-Column Desktop Layout */}
         <div className="flex flex-col lg:flex-row gap-6 items-start">
-          {/* Left Vertical Navigation Rail (Matches Reference Image Rounded Capsule Rail) */}
+          {/* Left Vertical Navigation Rail */}
           <nav
             aria-label="주요 메뉴"
             className="w-full lg:w-52 bg-[#F3EFEA] rounded-[28px] p-3 flex lg:flex-col justify-between gap-2 overflow-x-auto no-scrollbar shrink-0"
@@ -753,7 +912,7 @@ export default function App() {
             {isTeacherMode ? (
               <TeacherViews
                 activeTab={teacherTab}
-                workspaceOwnerUid={authUser.uid}
+                workspaceOwnerUid={WORKSPACE_ID}
                 teacherProfile={activeUser}
                 allUsers={allUsers}
                 missions={missions}
@@ -776,7 +935,7 @@ export default function App() {
             ) : (
               <StudentViews
                 activeTab={studentTab}
-                workspaceOwnerUid={authUser.uid}
+                workspaceOwnerUid={WORKSPACE_ID}
                 currentStudent={activeUser}
                 allUsers={allUsers}
                 missions={missions}
@@ -819,6 +978,111 @@ export default function App() {
           )}
         </div>
       </div>
+
+      {/* Password Change Modal (Works for both Teacher and Student) */}
+      {pwModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <form
+            onSubmit={handlePasswordChangeSubmit}
+            className="bg-[#FBF9F5] border border-[#E6E1D6] rounded-[32px] max-w-md w-full p-6 sm:p-8 shadow-xl space-y-4"
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-extrabold text-[#141413]">
+                {isTeacherMode
+                  ? '🔒 교사 관리자 아이디 / 비밀번호 변경'
+                  : `🔒 ${activeUser.displayName} 학생 비밀번호 변경`}
+              </h2>
+              <button
+                type="button"
+                onClick={() => setPwModalOpen(false)}
+                className="px-3 py-1 rounded-xl bg-[#EFECE6] text-xs font-bold text-[#141413] cursor-pointer"
+              >
+                닫기
+              </button>
+            </div>
+
+            <p className="text-xs text-[#5C574F] leading-relaxed">
+              {isTeacherMode
+                ? '다른 사람이 교사 대시보드에 들어오지 못하도록 관리자 아이디와 비밀번호를 안전하게 변경할 수 있습니다.'
+                : '다른 친구가 내 계정으로 들어오지 못하도록 나만의 비밀번호로 변경해 보세요.'}
+            </p>
+
+            {isTeacherMode && (
+              <div>
+                <label className="block text-xs font-bold text-[#141413] mb-1">
+                  교사 관리자 로그인 아이디
+                </label>
+                <input
+                  type="text"
+                  value={modalAdminId}
+                  onChange={(e) => setModalAdminId(e.target.value)}
+                  required
+                  className="w-full rounded-xl bg-white border border-[#E2DDD3] px-3.5 py-2.5 text-sm font-bold text-[#141413]"
+                />
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-bold text-[#141413] mb-1">
+                현재 비밀번호
+              </label>
+              <input
+                type="password"
+                value={modalCurrentPw}
+                onChange={(e) => setModalCurrentPw(e.target.value)}
+                placeholder="현재 비밀번호 입력"
+                required
+                className="w-full rounded-xl bg-white border border-[#E2DDD3] px-3.5 py-2.5 text-sm text-[#141413]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-[#141413] mb-1">
+                새 비밀번호 (4자리 이상)
+              </label>
+              <input
+                type="password"
+                value={modalNewPw}
+                onChange={(e) => setModalNewPw(e.target.value)}
+                placeholder="새 비밀번호 입력"
+                required
+                className="w-full rounded-xl bg-white border border-[#E2DDD3] px-3.5 py-2.5 text-sm text-[#141413]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-[#141413] mb-1">
+                새 비밀번호 확인
+              </label>
+              <input
+                type="password"
+                value={modalConfirmPw}
+                onChange={(e) => setModalConfirmPw(e.target.value)}
+                placeholder="새 비밀번호 다시 입력"
+                required
+                className="w-full rounded-xl bg-white border border-[#E2DDD3] px-3.5 py-2.5 text-sm text-[#141413]"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setPwModalOpen(false)}
+                className="px-4 py-2.5 rounded-xl bg-[#EFECE6] text-xs font-bold text-[#141413] cursor-pointer"
+              >
+                취소
+              </button>
+              <button
+                type="submit"
+                disabled={modalSaving}
+                className="px-5 py-2.5 rounded-xl bg-[#141413] text-white text-xs font-bold hover:bg-[#2C2A27] cursor-pointer"
+              >
+                {modalSaving ? '변경 중...' : '비밀번호 변경 저장'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

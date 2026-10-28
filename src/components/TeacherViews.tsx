@@ -1788,6 +1788,69 @@ const TeacherSettingsAndAuditView: React.FC<TeacherContextProps> = ({
   const [profilePolicy, setProfilePolicy] = useState(appSettings?.profilePolicy || '');
   const [allowPhoto, setAllowPhoto] = useState(appSettings?.allowPhotoEvidence ?? false);
 
+  // Teacher Admin Credentials Change State
+  const [adminLoginId, setAdminLoginId] = useState(teacherProfile.studentLoginId);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [changingPw, setChangingPw] = useState(false);
+
+  const handleSaveTeacherCredentials = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (changingPw) return;
+
+    const cleanLoginId = adminLoginId.trim().replace(/[^a-zA-Z0-9_-]/g, '');
+    if (cleanLoginId.length < 3) {
+      onNotify('관리자 아이디는 영문/숫자 3자 이상이어야 합니다.', 'error');
+      return;
+    }
+    if (newPassword.trim().length < 4) {
+      onNotify('새 관리자 비밀번호는 4자리 이상으로 입력해 주세요.', 'error');
+      return;
+    }
+    if (newPassword.trim() !== confirmPassword.trim()) {
+      onNotify('새 비밀번호와 비밀번호 확인이 일치하지 않습니다.', 'error');
+      return;
+    }
+
+    setChangingPw(true);
+    try {
+      const currentHash = await hashPassword(currentPassword.trim());
+      if (currentHash !== teacherProfile.passwordHash) {
+        onNotify('현재 관리자 비밀번호가 일치하지 않습니다.', 'error');
+        setChangingPw(false);
+        return;
+      }
+
+      const nextHash = await hashPassword(newPassword.trim());
+      await updateDoc(doc(db, 'users', teacherProfile.uid), {
+        studentLoginId: cleanLoginId,
+        passwordHash: nextHash,
+        updatedAt: serverTimestamp(),
+      });
+
+      await recordAuditLog({
+        workspaceOwnerUid,
+        actorUid: teacherProfile.uid,
+        actorName: teacherProfile.displayName,
+        action: 'TEACHER_CREDENTIALS_UPDATED',
+        targetType: 'user',
+        targetId: teacherProfile.uid,
+        reason: '교사 관리자 아이디 및 비밀번호 보안 변경',
+        metadataSummary: `관리자 ID: ${cleanLoginId} (비밀번호 암호화 변경 완료)`,
+      });
+
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      onNotify('교사 관리자 아이디와 비밀번호가 안전하게 변경되었습니다!', 'success');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `users/${teacherProfile.uid}`);
+    } finally {
+      setChangingPw(false);
+    }
+  };
+
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!appSettings) return;
@@ -1821,12 +1884,91 @@ const TeacherSettingsAndAuditView: React.FC<TeacherContextProps> = ({
     <div className="space-y-6">
       <div>
         <p className="text-xs font-semibold text-[#6B665E] mb-1">
-          학급 안전 정책 설정 및 교사 관리 작업 감사 로그(Audit Logs)
+          교사 관리자 비밀번호 변경 · 학급 안전 정책 설정 · 감사 로그(Audit Logs)
         </p>
         <h1 className="text-2xl sm:text-3xl font-extrabold text-[#141413]">
-          서비스 정책 설정 및 감사 로그
+          교사 보안 설정 및 감사 로그
         </h1>
       </div>
+
+      {/* Teacher Admin ID & Password Security Form */}
+      <form
+        onSubmit={handleSaveTeacherCredentials}
+        className="bg-[#E0F2FE] rounded-[28px] p-6 space-y-4"
+      >
+        <div>
+          <h2 className="text-base font-extrabold text-[#141413]">
+            🔒 교사 관리자 아이디 및 비밀번호 변경
+          </h2>
+          <p className="text-xs text-[#3D3A35] mt-0.5">
+            학생이나 외부인이 교사 대시보드에 들어오지 못하도록 관리자 비밀번호를 안전하게 변경하세요.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div>
+            <label className="block text-xs font-bold text-[#141413] mb-1">
+              관리자 로그인 아이디
+            </label>
+            <input
+              type="text"
+              value={adminLoginId}
+              onChange={(e) => setAdminLoginId(e.target.value)}
+              required
+              className="w-full rounded-xl bg-white px-3.5 py-2 text-xs font-bold text-[#141413]"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-[#141413] mb-1">
+              현재 관리자 비밀번호
+            </label>
+            <input
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              placeholder="현재 비밀번호 입력"
+              required
+              className="w-full rounded-xl bg-white px-3.5 py-2 text-xs text-[#141413]"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-[#141413] mb-1">
+              새 관리자 비밀번호 (4자 이상)
+            </label>
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="새 비밀번호 입력"
+              required
+              className="w-full rounded-xl bg-white px-3.5 py-2 text-xs text-[#141413]"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-[#141413] mb-1">
+              새 관리자 비밀번호 확인
+            </label>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="새 비밀번호 다시 입력"
+              required
+              className="w-full rounded-xl bg-white px-3.5 py-2 text-xs text-[#141413]"
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end">
+          <button
+            type="submit"
+            disabled={changingPw}
+            className="px-5 py-2.5 rounded-xl bg-[#141413] text-white text-xs font-bold cursor-pointer"
+          >
+            {changingPw ? '변경 중...' : '교사 관리자 비밀번호 변경 저장'}
+          </button>
+        </div>
+      </form>
 
       <form
         onSubmit={handleSaveSettings}
