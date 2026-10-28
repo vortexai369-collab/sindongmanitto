@@ -461,7 +461,7 @@ service cloud.firestore {
       allow update: if isValidId(userId) && isValidUser(incoming()) &&
         incoming().uid == existing().uid &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
         incoming().updatedAt == request.time &&
         isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(userId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
@@ -474,7 +474,7 @@ service cloud.firestore {
       allow update: if isValidId(classId) && isValidClassRoom(incoming()) &&
         incoming().classId == existing().classId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
         incoming().updatedAt == request.time &&
         isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if false;
@@ -487,7 +487,7 @@ service cloud.firestore {
       allow update: if isValidId(assignmentId) && isValidManittoAssignment(incoming()) &&
         incoming().assignmentId == existing().assignmentId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
         incoming().updatedAt == request.time &&
         isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(assignmentId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
@@ -500,7 +500,7 @@ service cloud.firestore {
       allow update: if isValidId(missionId) && isValidMission(incoming()) &&
         incoming().missionId == existing().missionId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
         incoming().updatedAt == request.time &&
         isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(missionId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
@@ -513,7 +513,7 @@ service cloud.firestore {
       allow update: if isValidId(submissionId) && isValidMissionSubmission(incoming()) &&
         incoming().submissionId == existing().submissionId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
         incoming().updatedAt == request.time &&
         isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(submissionId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
@@ -526,7 +526,7 @@ service cloud.firestore {
       allow update: if isValidId(ledgerId) && isValidScoreLedger(incoming()) &&
         incoming().ledgerId == existing().ledgerId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
         incoming().updatedAt == request.time &&
         isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(ledgerId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
@@ -539,7 +539,7 @@ service cloud.firestore {
       allow update: if isValidId(statId) && isValidStudentStats(incoming()) &&
         incoming().studentUid == existing().studentUid &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
         incoming().updatedAt == request.time &&
         isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(statId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
@@ -552,7 +552,7 @@ service cloud.firestore {
       allow update: if isValidId(badgeId) && isValidBadge(incoming()) &&
         incoming().badgeId == existing().badgeId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
         incoming().updatedAt == request.time &&
         isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if false;
@@ -565,7 +565,7 @@ service cloud.firestore {
       allow update: if isValidId(awardId) && isValidBadgeAward(incoming()) &&
         incoming().awardId == existing().awardId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
         incoming().updatedAt == request.time &&
         isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(awardId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
@@ -578,7 +578,7 @@ service cloud.firestore {
       allow update: if isValidId(threadId) && isValidLetterThread(incoming()) &&
         incoming().threadId == existing().threadId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
         incoming().updatedAt == request.time &&
         isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(threadId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
@@ -591,7 +591,7 @@ service cloud.firestore {
       allow update: if isValidId(letterId) && isValidLetter(incoming()) &&
         incoming().letterId == existing().letterId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
         incoming().updatedAt == request.time &&
         isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(letterId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
@@ -604,7 +604,7 @@ service cloud.firestore {
       allow update: if isValidId(sessionId) && isValidLoungeSession(incoming()) &&
         incoming().sessionId == existing().sessionId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
         incoming().updatedAt == request.time &&
         isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(sessionId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
@@ -625,7 +625,7 @@ service cloud.firestore {
           isValidLoungeParticipant(incoming()) &&
           incoming().participantUid == existing().participantUid &&
           incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
-          incoming().createdAt == existing().createdAt &&
+          (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
           incoming().updatedAt == request.time &&
           isAuthorizedWorkspace(get(/databases/$(database)/documents/loungeSessions/$(sessionId)).data.workspaceOwnerUid);
         allow delete: if isValidId(sessionId) && isValidId(participantId) &&
@@ -640,7 +640,7 @@ service cloud.firestore {
       allow update: if isValidId(messageId) && isValidLoungeMessage(incoming()) &&
         incoming().messageId == existing().messageId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
         incoming().updatedAt == request.time &&
         isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(messageId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
@@ -653,7 +653,7 @@ service cloud.firestore {
       allow update: if isValidId(reportId) && isValidReport(incoming()) &&
         incoming().reportId == existing().reportId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
         incoming().updatedAt == request.time &&
         isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(reportId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
@@ -673,7 +673,7 @@ service cloud.firestore {
       allow update: if isValidId(settingId) && isValidAppSetting(incoming()) &&
         incoming().settingId == existing().settingId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
-        incoming().createdAt == existing().createdAt &&
+        (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&
         incoming().updatedAt == request.time &&
         isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if false;

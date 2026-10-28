@@ -1192,10 +1192,15 @@ export async function generateFullClassroomAssignments(params: {
   const endsAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
   // 1. Delete all old assignments and their letter threads
-  const oldAssignSnap = await getDocs(
-    query(collection(db, 'manittoAssignments'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
-  );
-  await Promise.all(oldAssignSnap.docs.map((d) => deleteDoc(doc(db, 'manittoAssignments', d.id))));
+  const [oldAssignSnap, oldThreadSnap] = await Promise.all([
+    getDocs(query(collection(db, 'manittoAssignments'), where('workspaceOwnerUid', '==', workspaceOwnerUid))),
+    getDocs(query(collection(db, 'letterThreads'), where('workspaceOwnerUid', '==', workspaceOwnerUid))),
+  ]);
+
+  await Promise.all([
+    ...oldAssignSnap.docs.map((d) => deleteDoc(doc(db, 'manittoAssignments', d.id))),
+    ...oldThreadSnap.docs.map((d) => deleteDoc(doc(db, 'letterThreads', d.id))),
+  ]);
 
   // 2. Circular derangement: shuffle all active students
   const shuffled = [...activeStudents].sort(() => Math.random() - 0.5);

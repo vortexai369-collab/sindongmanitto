@@ -2960,18 +2960,37 @@ const TeacherAssignmentsView: React.FC<TeacherContextProps> = ({
       const receiverStudent = activeStudents.find((s) => s.uid === modalReceiverUid);
 
       const existing = assignments.find((a) => a.giverUid === modalGiverUid);
-      const assignmentId = existing?.assignmentId || `assign_${modalGiverUid}`;
+      const prefix = workspaceOwnerUid.slice(0, 8);
+      const assignmentId = existing?.assignmentId || `${prefix}_assign_${modalGiverUid}_${Date.now().toString(36)}`;
+      const threadId = `${prefix}_thread_${assignmentId.slice(-10)}`;
+      const scopedClassId = teacherProfile.classId || `class_${prefix}_5_2`;
+      const startsAt = existing?.startsAt || new Date().toISOString().slice(0, 10);
+      const endsAt = existing?.endsAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+      await setDoc(doc(db, 'manittoAssignments', assignmentId), {
+        assignmentId,
+        workspaceOwnerUid,
+        classId: scopedClassId,
+        giverUid: modalGiverUid,
+        receiverUid: modalReceiverUid,
+        active: true,
+        startsAt,
+        endsAt,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
 
       await setDoc(
-        doc(db, 'manittoAssignments', assignmentId),
+        doc(db, 'letterThreads', threadId),
         {
-          assignmentId,
+          threadId,
           workspaceOwnerUid,
-          classId: teacherProfile.classId || '5-2',
-          giverUid: modalGiverUid,
-          receiverUid: modalReceiverUid,
-          isRevealed: appSettings?.identityRevealPolicy === 'revealed',
-          createdAt: existing?.createdAt || serverTimestamp(),
+          classId: scopedClassId,
+          assignmentId,
+          participantUids: [modalGiverUid, modalReceiverUid],
+          lastMessageAt: new Date().toISOString(),
+          status: 'active',
+          createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         },
         { merge: true }
