@@ -37,6 +37,7 @@ import {
 } from './firebase';
 import {
   UserProfile,
+  ClassRoom,
   Mission,
   MissionSubmission,
   ScoreLedger,
@@ -125,6 +126,7 @@ export default function App() {
   const [reports, setReports] = useState<ReportRecord[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [appSettingsList, setAppSettingsList] = useState<AppSetting[]>([]);
+  const [classesList, setClassesList] = useState<ClassRoom[]>([]);
 
   const showToast = (
     message: string,
@@ -254,6 +256,7 @@ export default function App() {
     subscribeCol<ReportRecord>('reports', setReports);
     subscribeCol<AuditLog>('auditLogs', setAuditLogs);
     subscribeCol<AppSetting>('appSettings', setAppSettingsList);
+    subscribeCol<ClassRoom>('classes', setClassesList);
 
     return () => {
       unsubs.forEach((fn) => fn());
@@ -299,6 +302,10 @@ export default function App() {
     () => allUsers.find((u) => u.uid === loggedInUid) || null,
     [allUsers, loggedInUid]
   );
+
+  const currentClass = useMemo(() => classesList[0] || null, [classesList]);
+  const schoolName = currentClass?.schoolName || '전주신동초등학교';
+  const className = currentClass?.name || '5학년 2반';
 
   // 4. Real-time Session Heartbeat for Logged-In User
   useEffect(() => {
@@ -517,7 +524,7 @@ export default function App() {
                 : '데이터베이스 연결에 지연이 발생하고 있습니다.'}
             </p>
             <p className="text-[11px] text-[#6B665E]">
-              전주신동초 5학년 2반 마니또 워크스페이스 실시간 동기화 중 ({loadingSeconds}초 경과)
+              {schoolName} {className} 마니또 워크스페이스 실시간 동기화 중 ({loadingSeconds}초 경과)
             </p>
           </div>
 
@@ -564,7 +571,7 @@ export default function App() {
           {/* Left Intro Column */}
           <div className="lg:col-span-5 space-y-4 lg:sticky lg:top-8">
             <div className="inline-flex items-center gap-2 bg-[#F3EFEA] rounded-2xl px-3.5 py-2 text-xs font-bold text-[#141413]">
-              <span>🏫 전주신동초등학교 5학년 2반</span>
+              <span>🏫 {schoolName} {className}</span>
             </div>
 
             <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-[#141413] tracking-tight leading-snug">
@@ -574,7 +581,7 @@ export default function App() {
             </h1>
 
             <p className="text-xs sm:text-sm text-[#5C574F] leading-relaxed">
-              <strong>「전주신동초 마니또」</strong>에 오신 것을 환영해요! 학생은 오른쪽 우리 반 명단에서 자신의 이름을 클릭하고 비밀번호를 입력해 입장하세요.
+              <strong>「{schoolName.includes('초등') ? schoolName.replace('등학교', '') : schoolName} 마니또」</strong>에 오신 것을 환영해요! 학생은 오른쪽 우리 반 명단에서 자신의 이름을 클릭하고 비밀번호를 입력해 입장하세요.
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
@@ -849,10 +856,13 @@ export default function App() {
           {/* Zone 1: Brand Wordmark */}
           <div className="flex items-center gap-2.5 shrink-0">
             <div className="w-9 h-9 rounded-xl bg-[#141413] text-white flex items-center justify-center font-extrabold text-sm shadow-xs">
-              신
+              {schoolName.slice(0, 1) || '신'}
             </div>
             <span className="text-base sm:text-lg font-extrabold tracking-tight text-[#141413] whitespace-nowrap">
-              전주신동초 마니또
+              {schoolName.includes('초등') ? schoolName.replace('등학교', '') : schoolName} 마니또
+            </span>
+            <span className="hidden sm:inline-block px-2.5 py-1 rounded-lg bg-[#F3EFEA] text-[11px] font-bold text-[#5C574F]">
+              {className}
             </span>
           </div>
 
@@ -861,7 +871,7 @@ export default function App() {
             <span>
               {isTeacherMode
                 ? `👩‍🏫 교사 관리자 모드 (${activeUser.displayName} · ID: ${activeUser.studentLoginId})`
-                : `🎒 5학년 2반 ${activeUser.displayName} 학생`}
+                : `🎒 ${className} ${activeUser.displayName} 학생`}
             </span>
           </div>
 
@@ -1006,7 +1016,7 @@ export default function App() {
                   {activeUser.displayName}
                 </p>
                 <p className="text-[10px] text-[#6B665E] truncate">
-                  {isTeacherMode ? '교사 관리자' : '5학년 2반 학생'}
+                  {isTeacherMode ? '교사 관리자' : `${className} 학생`}
                 </p>
               </div>
             </div>
@@ -1019,6 +1029,7 @@ export default function App() {
                 activeTab={teacherTab}
                 workspaceOwnerUid={WORKSPACE_ID}
                 teacherProfile={activeUser}
+                currentClass={currentClass}
                 allUsers={allUsers}
                 missions={missions}
                 submissions={submissions}
@@ -1067,6 +1078,7 @@ export default function App() {
             <div className="w-full lg:w-80 xl:w-84 shrink-0">
               <RightSummaryPanel
                 activeUser={activeUser}
+                className={className}
                 allUsers={allUsers}
                 missions={missions}
                 submissions={submissions}

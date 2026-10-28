@@ -26,6 +26,7 @@ import { getBadgeProgress } from '../services/manittoServerEngine';
 
 interface RightSummaryPanelProps {
   activeUser: UserProfile;
+  className?: string;
   allUsers: UserProfile[];
   missions: Mission[];
   submissions: MissionSubmission[];
@@ -41,6 +42,7 @@ interface RightSummaryPanelProps {
 
 export const RightSummaryPanel: React.FC<RightSummaryPanelProps> = ({
   activeUser,
+  className,
   allUsers,
   missions,
   submissions,
@@ -160,8 +162,8 @@ export const RightSummaryPanel: React.FC<RightSummaryPanelProps> = ({
         <h2 className="text-lg font-extrabold text-[#141413]">{activeUser.displayName}</h2>
         <p className="text-xs text-[#6B665E] mt-0.5">
           {isTeacher
-            ? '전주신동초 5학년 2반 담임교사'
-            : `5학년 2반 · 아이디: ${activeUser.studentLoginId}`}
+            ? `${className || '5학년 2반'} 담임교사`
+            : `${className || '5학년 2반'} · 아이디: ${activeUser.studentLoginId}`}
         </p>
       </div>
 

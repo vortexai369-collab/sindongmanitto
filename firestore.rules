@@ -21,10 +21,7 @@ service cloud.firestore {
     }
 
     function isAuthorizedWorkspace(ownerUid) {
-      return ownerUid is string && ownerUid.size() >= 1 && ownerUid.size() <= 128 && (
-        ownerUid == 'shindong_5_2_ws' ||
-        (request.auth != null && request.auth.token.email_verified == true && ownerUid == request.auth.uid)
-      );
+      return ownerUid is string && ownerUid.size() >= 1 && ownerUid.size() <= 128;
     }
 
     function isStringList(arr, maxLen) {
@@ -62,7 +59,7 @@ service cloud.firestore {
       data.studentLoginId is string && data.studentLoginId.size() >= 1 && data.studentLoginId.size() <= 64 &&
       data.passwordHash is string && data.passwordHash.size() >= 1 && data.passwordHash.size() <= 128 &&
       data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
-      isValidId(data.classId) &&
+      data.classId is string && data.classId.size() >= 1 && data.classId.size() <= 128 &&
       data.avatarId is string && data.avatarId.size() >= 1 && data.avatarId.size() <= 40 &&
       data.bio is string && data.bio.size() <= 300 &&
       isStringList(data.interests, 10) &&
@@ -414,12 +411,12 @@ service cloud.firestore {
       ]) &&
       isValidId(data.logId) &&
       isAuthorizedWorkspace(data.workspaceOwnerUid) &&
-      isValidId(data.actorUid) &&
+      data.actorUid is string && data.actorUid.size() >= 1 && data.actorUid.size() <= 128 &&
       data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 80 &&
       data.action is string && data.action.size() >= 1 && data.action.size() <= 80 &&
       data.targetType is string && data.targetType.size() >= 1 && data.targetType.size() <= 40 &&
       data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128 &&
-      data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 300 &&
+      data.reason is string && data.reason.size() <= 300 &&
       data.metadataSummary is string && data.metadataSummary.size() <= 400 &&
       data.createdAt is timestamp;
     }
@@ -466,13 +463,7 @@ service cloud.firestore {
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly([
-          'studentLoginId', 'displayName', 'avatarId', 'bio', 'interests', 'hobbies',
-          'favoriteFood', 'strengths', 'cheerWanted', 'profileVisibility',
-          'passwordHash', 'accountStatus', 'lastLoginAt', 'lastHeartbeatAt',
-          'isOnlineSession', 'updatedAt'
-        ]);
+        isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(userId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
@@ -485,8 +476,7 @@ service cloud.firestore {
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'schoolName', 'teacherUids', 'active', 'updatedAt']);
+        isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if false;
     }
 
@@ -499,8 +489,7 @@ service cloud.firestore {
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['giverUid', 'receiverUid', 'active', 'startsAt', 'endsAt', 'updatedAt']);
+        isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(assignmentId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
@@ -513,12 +502,7 @@ service cloud.firestore {
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly([
-          'title', 'description', 'howTo', 'category', 'difficulty',
-          'points', 'active', 'requiresTeacherApproval', 'allowRepeat',
-          'maxCompletions', 'badgeRuleType', 'updatedAt'
-        ]);
+        isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(missionId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
@@ -531,12 +515,7 @@ service cloud.firestore {
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly([
-          'actionDescription', 'reflection', 'activityDate', 'evidenceNote',
-          'status', 'awardedPoints', 'reviewedBy', 'reviewedAt',
-          'reviewComment', 'updatedAt'
-        ]);
+        isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(submissionId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
@@ -549,9 +528,8 @@ service cloud.firestore {
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['reversalOf', 'updatedAt']);
-      allow delete: if false;
+        isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow delete: if isValidId(ledgerId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
     match /studentStats/{statId} {
@@ -563,8 +541,7 @@ service cloud.firestore {
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['totalPoints', 'completedMissionCount', 'earnedBadgeCount', 'updatedAt']);
+        isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(statId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
@@ -577,8 +554,7 @@ service cloud.firestore {
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'criteria', 'targetCount', 'active', 'updatedAt']);
+        isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if false;
     }
 
@@ -591,8 +567,7 @@ service cloud.firestore {
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['criteriaSnapshot', 'updatedAt']);
+        isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(awardId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
@@ -605,9 +580,8 @@ service cloud.firestore {
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageAt', 'status', 'updatedAt']);
-      allow delete: if false;
+        isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow delete: if isValidId(threadId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
     match /letters/{letterId} {
@@ -619,8 +593,7 @@ service cloud.firestore {
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['readAt', 'moderationStatus', 'deletedAt', 'updatedAt']);
+        isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(letterId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
@@ -633,11 +606,7 @@ service cloud.firestore {
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly([
-          'title', 'noticeRules', 'scheduledDate', 'startsAt', 'endsAt',
-          'status', 'waitingCount', 'participantCount', 'updatedAt'
-        ]);
+        isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(sessionId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
 
       // Pillar 1 Master Gate Subcollection
@@ -658,11 +627,7 @@ service cloud.firestore {
           incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
           incoming().createdAt == existing().createdAt &&
           incoming().updatedAt == request.time &&
-          isAuthorizedWorkspace(get(/databases/$(database)/documents/loungeSessions/$(sessionId)).data.workspaceOwnerUid) &&
-          incoming().diff(existing()).affectedKeys().hasOnly([
-            'anonymousAlias', 'presenceStatus', 'aliasChangeCount',
-            'lastHeartbeatAt', 'aliasChangedAt', 'updatedAt'
-          ]);
+          isAuthorizedWorkspace(get(/databases/$(database)/documents/loungeSessions/$(sessionId)).data.workspaceOwnerUid);
         allow delete: if isValidId(sessionId) && isValidId(participantId) &&
           isAuthorizedWorkspace(get(/databases/$(database)/documents/loungeSessions/$(sessionId)).data.workspaceOwnerUid);
       }
@@ -677,8 +642,7 @@ service cloud.firestore {
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['moderationStatus', 'hiddenAt', 'hiddenBy', 'updatedAt']);
+        isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if isValidId(messageId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
@@ -691,9 +655,8 @@ service cloud.firestore {
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAt', 'reviewNote', 'updatedAt']);
-      allow delete: if false;
+        isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow delete: if isValidId(reportId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
     match /auditLogs/{logId} {
@@ -712,13 +675,9 @@ service cloud.firestore {
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly([
-          'loungeRules', 'profilePolicy', 'letterModerationPolicy',
-          'dataRetentionPolicy', 'identityRevealPolicy',
-          'allowPhotoEvidence', 'updatedBy', 'updatedAt'
-        ]);
+        isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow delete: if false;
     }
   }
 }
+

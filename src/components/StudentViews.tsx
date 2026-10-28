@@ -2071,13 +2071,18 @@ const StudentLoungeView: React.FC<StudentContextProps> = ({
 
     try {
       if (!myParticipant) {
-        const randomAlias =
-          ANONYMOUS_ALIASES[Math.floor(Math.random() * ANONYMOUS_ALIASES.length)];
+        const usedAliases = new Set(loungeParticipants.map((p) => p.anonymousAlias));
+        const unusedAliases = ANONYMOUS_ALIASES.filter((a) => !usedAliases.has(a));
+        const assignedAlias =
+          unusedAliases.length > 0
+            ? unusedAliases[Math.floor(Math.random() * unusedAliases.length)]
+            : ANONYMOUS_ALIASES[Math.floor(Math.random() * ANONYMOUS_ALIASES.length)];
+
         await setDoc(partRef, {
           participantUid: currentStudent.uid,
           workspaceOwnerUid,
           sessionId: loungeSession.sessionId,
-          anonymousAlias: randomAlias,
+          anonymousAlias: assignedAlias,
           presenceStatus: targetState,
           aliasChangeCount: 0,
           joinedAt: nowIso,

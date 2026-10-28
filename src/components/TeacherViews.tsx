@@ -34,10 +34,11 @@ import {
   Line,
   Legend,
 } from 'recharts';
-import { doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import {
   UserProfile,
+  ClassRoom,
   Mission,
   MissionSubmission,
   ScoreLedger,
@@ -69,11 +70,17 @@ import {
   resetStudentPasswordTo1234,
   createStudentsBatch,
   deleteStudentsBatch,
+  cleanupOrphanedActivityData,
+  resetAllClassroomActivities,
+  updateTeacherProfile,
+  updateClassroomInfo,
+  generateFullClassroomAssignments,
 } from '../services/manittoServerEngine';
 
 interface TeacherContextProps {
   workspaceOwnerUid: string;
   teacherProfile: UserProfile;
+  currentClass: ClassRoom | null;
   allUsers: UserProfile[];
   missions: Mission[];
   submissions: MissionSubmission[];
@@ -114,11 +121,213 @@ export const TeacherViews: React.FC<TeacherContextProps & { activeTab: TeacherNa
 };
 
 /* ============================================================================
+ * TEACHER PROFILE MODAL (Allows updating Teacher Display Name, Avatar, Bio, Class)
+ * ========================================================================== */
+interface TeacherProfileModalProps {
+  workspaceOwnerUid: string;
+  teacherProfile: UserProfile;
+  currentClass: ClassRoom | null;
+  isOpen: boolean;
+  onClose: () => void;
+  onNotify: (msg: string, type?: 'success' | 'error' | 'info') => void;
+}
+
+const TeacherProfileModal: React.FC<TeacherProfileModalProps> = ({
+  workspaceOwnerUid,
+  teacherProfile,
+  currentClass,
+  isOpen,
+  onClose,
+  onNotify,
+}) => {
+  const [displayName, setDisplayName] = useState(teacherProfile.displayName);
+  const [avatarId, setAvatarId] = useState(teacherProfile.avatarId || 'teacher');
+  const [bio, setBio] = useState(teacherProfile.bio || '');
+  const [schoolName, setSchoolName] = useState(currentClass?.schoolName || '전주신동초등학교');
+  const [className, setClassName] = useState(currentClass?.name || '5학년 2반');
+  const [saving, setSaving] = useState(false);
+
+  // Sync state whenever modal is opened
+  React.useEffect(() => {
+    if (isOpen) {
+      setDisplayName(teacherProfile.displayName);
+      setAvatarId(teacherProfile.avatarId || 'teacher');
+      setBio(teacherProfile.bio || '');
+      setSchoolName(currentClass?.schoolName || '전주신동초등학교');
+      setClassName(currentClass?.name || '5학년 2반');
+    }
+  }, [isOpen, teacherProfile, currentClass]);
+
+  if (!isOpen) return null;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!displayName.trim()) {
+      onNotify('교사 성함을 입력해 주세요.', 'error');
+      return;
+    }
+    if (!className.trim()) {
+      onNotify('학급 이름을 입력해 주세요.', 'error');
+      return;
+    }
+    setSaving(true);
+    try {
+      await updateTeacherProfile({
+        workspaceOwnerUid,
+        teacherUid: teacherProfile.uid,
+        displayName: displayName.trim(),
+        avatarId,
+        bio: bio.trim(),
+        classId: teacherProfile.classId || currentClass?.classId || `class_${workspaceOwnerUid.slice(0, 8)}_5_2`,
+        className: className.trim(),
+        schoolName: schoolName.trim() || '전주신동초등학교',
+      });
+      onNotify('교사 성함과 학급 이름이 성공적으로 변경되었습니다!', 'success');
+      onClose();
+    } catch (err) {
+      onNotify(
+        '프로필 및 학급 이름 변경 중 오류 발생: ' + (err instanceof Error ? err.message : String(err)),
+        'error'
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+      <div className="bg-[#FBF9F5] rounded-[32px] max-w-lg w-full p-6 sm:p-8 space-y-5 shadow-2xl border border-white">
+        <div className="flex items-center justify-between pb-3 border-b border-[#E2DDD3]">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-[#DDD5F8] flex items-center justify-center text-xl">
+              👨‍🏫
+            </div>
+            <div>
+              <h3 className="text-lg font-extrabold text-[#141413]">교사 프로필 및 학급 이름 수정</h3>
+              <p className="text-xs text-[#6B665E]">
+                선생님 성함, 학급 명칭, 학교명, 아바타, 소개글을 변경합니다.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-8 h-8 rounded-full bg-[#EFECE6] flex items-center justify-center text-sm font-bold cursor-pointer hover:bg-[#E2DDD3]"
+          >
+            ✕
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-xs font-extrabold text-[#141413] mb-1.5">
+              선생님 성함 / 표시 이름
+            </label>
+            <input
+              type="text"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="예: 김신동 선생님"
+              required
+              className="w-full rounded-xl bg-white px-3.5 py-2.5 text-xs text-[#141413] font-bold focus:outline-none focus:ring-2 focus:ring-[#141413]"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-extrabold text-[#141413] mb-1.5">
+                학교명
+              </label>
+              <input
+                type="text"
+                value={schoolName}
+                onChange={(e) => setSchoolName(e.target.value)}
+                placeholder="예: 전주신동초등학교"
+                required
+                className="w-full rounded-xl bg-white px-3.5 py-2.5 text-xs text-[#141413] font-bold focus:outline-none focus:ring-2 focus:ring-[#141413]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-extrabold text-[#141413] mb-1.5">
+                학급 이름 / 명칭
+              </label>
+              <input
+                type="text"
+                value={className}
+                onChange={(e) => setClassName(e.target.value)}
+                placeholder="예: 5학년 2반"
+                required
+                className="w-full rounded-xl bg-white px-3.5 py-2.5 text-xs text-[#141413] font-bold focus:outline-none focus:ring-2 focus:ring-[#141413]"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-extrabold text-[#141413] mb-1.5">
+              교사 캐릭터 아바타
+            </label>
+            <div className="grid grid-cols-4 sm:grid-cols-6 gap-2 max-h-36 overflow-y-auto p-1.5 bg-white rounded-2xl border border-[#E8E4DC]">
+              {AVATAR_OPTIONS.map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setAvatarId(opt.id)}
+                  className={`p-2 rounded-xl flex flex-col items-center gap-1 cursor-pointer transition-all ${
+                    avatarId === opt.id
+                      ? 'bg-[#141413] text-white ring-2 ring-[#141413]'
+                      : 'hover:bg-[#F3EFEA] text-[#141413]'
+                  }`}
+                >
+                  <AvatarIllustration avatarId={opt.id} size="sm" />
+                  <span className="text-[10px] font-bold truncate max-w-full">{opt.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-extrabold text-[#141413] mb-1.5">
+              학급 마니또 인사말 / 소개 문구
+            </label>
+            <textarea
+              rows={3}
+              value={bio}
+              onChange={(e) => setBio(e.target.value)}
+              placeholder="예: 서로를 배려하고 칭찬하는 따뜻한 5학년 2반 마니또 교실입니다 🌸"
+              className="w-full rounded-xl bg-white p-3 text-xs text-[#141413] focus:outline-none focus:ring-2 focus:ring-[#141413]"
+            />
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="px-4 py-2.5 rounded-xl bg-[#EFECE6] text-xs font-bold text-[#4A463F] cursor-pointer hover:bg-[#E2DDD3]"
+            >
+              취소
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="px-5 py-2.5 rounded-xl bg-[#141413] text-white text-xs font-extrabold cursor-pointer hover:bg-[#2C2A27] shadow-xs"
+            >
+              {saving ? '저장 중...' : '프로필 및 학급 정보 저장하기'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+/* ============================================================================
  * 1. TEACHER OVERVIEW DASHBOARD (8 KPI Cards + Pending Approvals + Presence)
  * ========================================================================== */
 const TeacherDashboardOverview: React.FC<TeacherContextProps> = ({
   workspaceOwnerUid,
   teacherProfile,
+  currentClass,
   allUsers,
   missions,
   submissions,
@@ -132,6 +341,7 @@ const TeacherDashboardOverview: React.FC<TeacherContextProps> = ({
   onNavigate,
   onNotify,
 }) => {
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
   const students = useMemo(
     () => allUsers.filter((u) => u.role === 'student'),
     [allUsers]
@@ -216,14 +426,48 @@ const TeacherDashboardOverview: React.FC<TeacherContextProps> = ({
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="text-xs font-semibold text-[#6B665E] mb-1">
-          전주신동초 5학년 2반 교사용 관리자 대시보드
-        </p>
-        <h1 className="text-2xl sm:text-3xl font-extrabold text-[#141413]">
-          우리 반 마니또 운영 및 안전 현황
-        </h1>
+      {/* Header and Teacher Profile Banner */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold text-[#6B665E] mb-1">
+            {currentClass?.schoolName || '전주신동초등학교'} {currentClass?.name || '5학년 2반'} 교사용 관리자 대시보드
+          </p>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-[#141413]">
+            우리 반 마니또 운영 및 안전 현황
+          </h1>
+        </div>
+
+        {/* Teacher Profile Summary Chip & Edit Button */}
+        <div className="bg-[#F3EFEA] rounded-2xl p-3 sm:px-4 sm:py-2.5 flex items-center justify-between gap-3 border border-[#E6E1D6]">
+          <div className="flex items-center gap-2.5">
+            <AvatarIllustration avatarId={teacherProfile.avatarId || 'teacher'} size="sm" />
+            <div>
+              <p className="text-xs font-extrabold text-[#141413]">
+                {teacherProfile.displayName}
+              </p>
+              <p className="text-[11px] text-[#6B665E]">
+                {currentClass?.name || '5학년 2반'} 담임선생님
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setProfileModalOpen(true)}
+            className="px-3 py-1.5 rounded-xl bg-white text-[#141413] text-xs font-bold hover:bg-[#141413] hover:text-white cursor-pointer shadow-xs transition-colors"
+          >
+            ✏️ 이름/프로필 수정
+          </button>
+        </div>
       </div>
+
+      <TeacherProfileModal
+        workspaceOwnerUid={workspaceOwnerUid}
+        teacherProfile={teacherProfile}
+        currentClass={currentClass}
+        isOpen={profileModalOpen}
+        onClose={() => setProfileModalOpen(false)}
+        onNotify={onNotify}
+      />
 
       {/* 8 Top KPI Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
@@ -411,6 +655,51 @@ const TeacherStudentsView: React.FC<TeacherContextProps> = ({
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [isDeletingAll, setIsDeletingAll] = useState(false);
   const [deletingBatch, setDeletingBatch] = useState(false);
+
+  // Orphaned Activity Cleanup & Full Activity Reset States
+  const [cleaningOrphaned, setCleaningOrphaned] = useState(false);
+  const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [resettingActivities, setResettingActivities] = useState(false);
+
+  const handleCleanupOrphaned = async () => {
+    if (cleaningOrphaned) return;
+    setCleaningOrphaned(true);
+    try {
+      const res = await cleanupOrphanedActivityData({
+        workspaceOwnerUid,
+        teacherUid: teacherProfile.uid,
+        teacherName: teacherProfile.displayName,
+      });
+      onNotify(
+        res.cleanedCount > 0
+          ? `삭제된 학생의 고아 활동 기록 총 ${res.cleanedCount}건을 깨끗하게 정리했습니다.`
+          : '정리할 고아 활동 기록이 없습니다. 모든 활동 기록이 현재 학생 명단과 정상 일치합니다.',
+        'success'
+      );
+    } catch (err) {
+      onNotify('고아 활동 기록 정리 실패: ' + (err instanceof Error ? err.message : String(err)), 'error');
+    } finally {
+      setCleaningOrphaned(false);
+    }
+  };
+
+  const handleConfirmResetActivities = async () => {
+    if (resettingActivities) return;
+    setResettingActivities(true);
+    try {
+      await resetAllClassroomActivities({
+        workspaceOwnerUid,
+        teacherUid: teacherProfile.uid,
+        teacherName: teacherProfile.displayName,
+      });
+      setResetModalOpen(false);
+      onNotify('학급 전체 마니또 활동 기록이 0으로 깨끗하게 초기화되었습니다.', 'success');
+    } catch (err) {
+      onNotify('활동 기록 초기화 실패: ' + (err instanceof Error ? err.message : String(err)), 'error');
+    } finally {
+      setResettingActivities(false);
+    }
+  };
 
   const students = useMemo(() => {
     return allUsers
@@ -723,6 +1012,27 @@ const TeacherStudentsView: React.FC<TeacherContextProps> = ({
           >
             <UploadCloud className="w-4 h-4" />
             <span>📋 학생 일괄 등록</span>
+          </button>
+
+          <button
+            type="button"
+            disabled={cleaningOrphaned}
+            onClick={handleCleanupOrphaned}
+            className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-[#E0F2FE] text-[#0369A1] text-xs font-extrabold hover:bg-[#BAE6FD] cursor-pointer whitespace-nowrap shadow-xs"
+            title="학생 계정이 삭제되어 남아있는 고아 활동 기록(미션, 점수, 뱃지, 편지 등)을 깨끗하게 정리합니다."
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${cleaningOrphaned ? 'animate-spin' : ''}`} />
+            <span>{cleaningOrphaned ? '정리 중...' : '🧹 잔여 기록 정리'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setResetModalOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-[#FEF3C7] text-[#92400E] text-xs font-extrabold hover:bg-[#FDE68A] cursor-pointer whitespace-nowrap shadow-xs"
+            title="학생 계정은 유지하고 모든 미션 실천 기록, 점수, 뱃지, 편지, 대화 내용을 0으로 초기화합니다."
+          >
+            <AlertTriangle className="w-3.5 h-3.5" />
+            <span>⚠️ 활동 전체 초기화</span>
           </button>
 
           {students.length > 0 && (
@@ -1276,6 +1586,60 @@ const TeacherStudentsView: React.FC<TeacherContextProps> = ({
           </form>
         </div>
       )}
+
+      {/* =========================================================================
+       * MODAL 4: Full Activity Reset Confirmation Modal
+       * ======================================================================= */}
+      {resetModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-[#FBF9F5] rounded-[32px] max-w-md w-full p-6 space-y-4 shadow-xl border border-amber-300">
+            <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center text-2xl mx-auto">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <div className="text-center space-y-1">
+              <h3 className="text-lg font-extrabold text-[#141413]">
+                학급 전체 활동 기록 초기화
+              </h3>
+              <p className="text-xs text-amber-900 font-bold leading-relaxed">
+                학생 계정은 그대로 보존하고, 지금까지 실천한 모든 마니또 활동 기록을 0으로 깔끔하게 리셋하시겠습니까?
+              </p>
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-xs text-amber-900 space-y-1.5">
+              <p className="font-extrabold text-[#92400E]">• 초기화 대상 데이터:</p>
+              <ul className="list-disc pl-4 space-y-0.5 text-[#78350F]">
+                <li>모든 미션 실천 인증 기록 (MissionSubmissions)</li>
+                <li>점수 변동 원장 내역 (ScoreLedger) 및 학생 누적 점수 (0점으로 리셋)</li>
+                <li>획득한 뱃지 내역 (BadgeAwards)</li>
+                <li>익명 편지함 송수신 기록 (Letters & Threads)</li>
+                <li>익명 라운지 대화 메시지 (LoungeMessages)</li>
+              </ul>
+              <p className="font-extrabold text-emerald-800 pt-1">
+                ✓ 학생 계정(아이디/비밀번호) 및 교사 계정, 미션 20종은 안전하게 유지됩니다.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                disabled={resettingActivities}
+                onClick={() => setResetModalOpen(false)}
+                className="flex-1 py-2.5 rounded-xl bg-[#EFECE6] text-xs font-bold text-[#4A463F] cursor-pointer hover:bg-[#E2DDD3]"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                disabled={resettingActivities}
+                onClick={handleConfirmResetActivities}
+                className="flex-1 py-2.5 rounded-xl bg-amber-600 text-white text-xs font-extrabold cursor-pointer hover:bg-amber-700 shadow-xs"
+              >
+                {resettingActivities ? '초기화 진행 중...' : '확인, 활동 데이터 초기화'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -1648,31 +2012,31 @@ const TeacherAssignmentsView: React.FC<TeacherContextProps> = ({
   onNotify,
 }) => {
   const [shuffling, setShuffling] = useState(false);
+  const [manualModalOpen, setManualModalOpen] = useState(false);
+  const [modalGiverUid, setModalGiverUid] = useState<string>('');
+  const [modalReceiverUid, setModalReceiverUid] = useState<string>('');
+  const [savingManual, setSavingManual] = useState(false);
 
   const activeStudents = useMemo(
     () => allUsers.filter((u) => u.role === 'student' && u.accountStatus === 'active'),
     [allUsers]
   );
 
+  // Full Shuffle covering 100% of registered active students
   const handleShuffleAssignments = async () => {
-    if (activeStudents.length < 2 || shuffling) return;
+    if (activeStudents.length < 2 || shuffling) {
+      onNotify('마니또를 배정하려면 최소 2명 이상의 활성 학생이 필요합니다.', 'info');
+      return;
+    }
     setShuffling(true);
     try {
-      // Create a circular derangement permutation
-      const shuffled = [...activeStudents].sort(() => Math.random() - 0.5);
-      for (let i = 0; i < assignments.length; i++) {
-        const assign = assignments[i];
-        const giver = shuffled[i % shuffled.length];
-        const receiver = shuffled[(i + 1) % shuffled.length];
-        if (giver && receiver) {
-          await updateDoc(doc(db, 'manittoAssignments', assign.assignmentId), {
-            giverUid: giver.uid,
-            receiverUid: receiver.uid,
-            updatedAt: serverTimestamp(),
-          });
-        }
-      }
-
+      await generateFullClassroomAssignments({
+        workspaceOwnerUid,
+        teacherUid: teacherProfile.uid,
+        teacherName: teacherProfile.displayName,
+        classId: teacherProfile.classId || '5-2',
+        activeStudents,
+      });
       await recordAuditLog({
         workspaceOwnerUid,
         actorUid: teacherProfile.uid,
@@ -1680,15 +2044,93 @@ const TeacherAssignmentsView: React.FC<TeacherContextProps> = ({
         action: 'MANITTO_RESHUFFLED',
         targetType: 'manittoAssignments',
         targetId: teacherProfile.classId,
-        reason: '교사에 의한 학급 전체 마니또 순환 재배정',
-        metadataSummary: `활성 학생 ${activeStudents.length}명 마니또 순환 배정 갱신`,
+        reason: '교사에 의한 학급 전체 마니또 순환 자동 재배정',
+        metadataSummary: `활성 학생 ${activeStudents.length}명 전원 100% 마니또 순환 배정 완료`,
       });
 
-      onNotify('학급 전체 마니또가 겹치지 않게 순환 재배정되었습니다!', 'success');
+      onNotify(
+        `우리 반 학생 ${activeStudents.length}명 전원의 마니또가 겹치지 않게 순환 재배정되었습니다! 🎉`,
+        'success'
+      );
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, 'manittoAssignments');
+      onNotify('마니또 배정 중 오류: ' + (err instanceof Error ? err.message : String(err)), 'error');
     } finally {
       setShuffling(false);
+    }
+  };
+
+  const handleOpenManualEdit = (giverUid: string) => {
+    setModalGiverUid(giverUid);
+    const existing = assignments.find((a) => a.giverUid === giverUid);
+    setModalReceiverUid(existing?.receiverUid || '');
+    setManualModalOpen(true);
+  };
+
+  const handleSaveManualAssignment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!modalGiverUid || !modalReceiverUid) {
+      onNotify('마니또 학생과 챙겨줄 친구를 모두 선택해 주세요.', 'error');
+      return;
+    }
+    if (modalGiverUid === modalReceiverUid) {
+      onNotify('자기 자신을 마니또 대상으로 지정할 수 없습니다.', 'error');
+      return;
+    }
+
+    setSavingManual(true);
+    try {
+      const giverStudent = activeStudents.find((s) => s.uid === modalGiverUid);
+      const receiverStudent = activeStudents.find((s) => s.uid === modalReceiverUid);
+
+      const existing = assignments.find((a) => a.giverUid === modalGiverUid);
+      const assignmentId = existing?.assignmentId || `assign_${modalGiverUid}`;
+
+      await setDoc(
+        doc(db, 'manittoAssignments', assignmentId),
+        {
+          assignmentId,
+          workspaceOwnerUid,
+          classId: teacherProfile.classId || '5-2',
+          giverUid: modalGiverUid,
+          receiverUid: modalReceiverUid,
+          isRevealed: appSettings?.identityRevealPolicy === 'revealed',
+          createdAt: existing?.createdAt || serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      await recordAuditLog({
+        workspaceOwnerUid,
+        actorUid: teacherProfile.uid,
+        actorName: teacherProfile.displayName,
+        action: 'MANITTO_MANUAL_ASSIGNED',
+        targetType: 'manittoAssignment',
+        targetId: assignmentId,
+        reason: '교사에 의한 마니또 짝 수동 설정 및 변경',
+        metadataSummary: `${giverStudent?.displayName || modalGiverUid} -> ${receiverStudent?.displayName || modalReceiverUid}`,
+      });
+
+      onNotify(
+        `${giverStudent?.displayName} 학생의 마니또 대상이 ${receiverStudent?.displayName}(으)로 수동 설정되었습니다.`,
+        'success'
+      );
+      setManualModalOpen(false);
+    } catch (err) {
+      onNotify('수동 배정 저장 오류: ' + (err instanceof Error ? err.message : String(err)), 'error');
+    } finally {
+      setSavingManual(false);
+    }
+  };
+
+  const handleRemoveAssignment = async (giverUid: string) => {
+    const existing = assignments.find((a) => a.giverUid === giverUid);
+    if (!existing) return;
+    try {
+      await deleteDoc(doc(db, 'manittoAssignments', existing.assignmentId));
+      onNotify('해당 학생의 마니또 배정이 해제되었습니다.', 'info');
+    } catch (err) {
+      onNotify('배정 해제 오류: ' + (err instanceof Error ? err.message : String(err)), 'error');
     }
   };
 
@@ -1725,72 +2167,217 @@ const TeacherAssignmentsView: React.FC<TeacherContextProps> = ({
     }
   };
 
+  const assignedCount = activeStudents.filter((stu) =>
+    assignments.some((a) => a.giverUid === stu.uid && a.receiverUid)
+  ).length;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
           <p className="text-xs font-semibold text-[#6B665E] mb-1">
-            마니또 순환 배정 관리 및 정체 공개 정책 설정
+            전체 학생 {activeStudents.length}명 중 {assignedCount}명 배정 완료 · 자동 순환 및 수동 직접 배정
           </p>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-[#141413]">
-            우리 반 마니또 배정 현황
+            우리 반 마니또 배정 관리
           </h1>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
+            type="button"
             onClick={handleToggleRevealPolicy}
-            className="px-4 py-2.5 rounded-xl bg-[#DDD5F8] text-[#141413] text-xs font-bold cursor-pointer"
+            className="px-4 py-2.5 rounded-xl bg-[#DDD5F8] text-[#141413] text-xs font-bold cursor-pointer hover:bg-[#C9BFF3] transition-colors"
           >
             {appSettings?.identityRevealPolicy === 'revealed'
               ? '현재: 마니또 공개됨 (다시 숨기기)'
               : '현재: 마니또 비밀 유지 중 (정체 공개하기)'}
           </button>
           <button
+            type="button"
             onClick={handleShuffleAssignments}
-            disabled={shuffling}
-            className="px-4 py-2.5 rounded-xl bg-[#141413] text-white text-xs font-bold cursor-pointer flex items-center gap-1.5"
+            disabled={shuffling || activeStudents.length < 2}
+            className="px-4 py-2.5 rounded-xl bg-[#141413] text-white text-xs font-bold cursor-pointer flex items-center gap-1.5 hover:bg-[#2C2A27] disabled:opacity-50 shadow-xs"
           >
-            <Shuffle className="w-3.5 h-3.5" />
-            <span>무작위 순환 재배정</span>
+            <Shuffle className={`w-3.5 h-3.5 ${shuffling ? 'animate-spin' : ''}`} />
+            <span>{shuffling ? '전체 순환 배정 중...' : '전원 무작위 순환 배정'}</span>
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {assignments.map((a, idx) => {
-          const giver = allUsers.find((u) => u.uid === a.giverUid);
-          const receiver = allUsers.find((u) => u.uid === a.receiverUid);
-          return (
-            <div
-              key={a.assignmentId}
-              className="bg-[#F3EFEA] rounded-[24px] p-5 flex items-center justify-between gap-3"
-            >
-              <div className="flex items-center gap-2.5">
-                <AvatarIllustration avatarId={giver?.avatarId || 'rabbit'} size="sm" />
-                <div>
-                  <span className="text-[10px] font-bold text-[#6B665E]">마니또 (챙겨주는 학생)</span>
-                  <p className="text-sm font-extrabold text-[#141413]">
-                    {giver?.displayName || '학생'}
-                  </p>
+      {/* Roster-Wide Assignment Grid */}
+      {activeStudents.length === 0 ? (
+        <div className="bg-[#F3EFEA] rounded-[28px] p-8 text-center text-xs text-[#6B665E]">
+          등록된 활성 학생이 없습니다. 먼저 [학생 명단/계정] 탭에서 학생을 등록해 주세요.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {activeStudents.map((giver) => {
+            const currentAssignment = assignments.find((a) => a.giverUid === giver.uid);
+            const receiver = currentAssignment
+              ? allUsers.find((u) => u.uid === currentAssignment.receiverUid)
+              : null;
+
+            return (
+              <div
+                key={giver.uid}
+                className="bg-[#F3EFEA] rounded-[24px] p-5 flex flex-col justify-between gap-3 shadow-xs border border-[#E8E4DC]/60"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  {/* Giver Student */}
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <AvatarIllustration avatarId={giver.avatarId || 'rabbit'} size="sm" />
+                    <div className="min-w-0">
+                      <span className="text-[10px] font-bold text-[#6B665E] block truncate">
+                        마니또 (챙겨주는 친구)
+                      </span>
+                      <p className="text-sm font-extrabold text-[#141413] truncate">
+                        {giver.displayName}
+                      </p>
+                      <p className="text-[10px] text-[#8C827A] font-mono">
+                        {giver.studentLoginId}
+                      </p>
+                    </div>
+                  </div>
+
+                  <span className="text-base font-extrabold text-[#8C827A] shrink-0 px-1">→</span>
+
+                  {/* Receiver Student */}
+                  <div className="flex items-center gap-2.5 text-right min-w-0">
+                    <div className="min-w-0">
+                      <span className="text-[10px] font-bold text-emerald-700 block truncate">
+                        챙김받을 대상
+                      </span>
+                      {receiver ? (
+                        <>
+                          <p className="text-sm font-extrabold text-emerald-900 truncate">
+                            {receiver.displayName}
+                          </p>
+                          <p className="text-[10px] text-emerald-700 font-mono">
+                            {receiver.studentLoginId}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-xs font-bold text-rose-600">⚠️ 미배정</p>
+                      )}
+                    </div>
+                    {receiver ? (
+                      <AvatarIllustration avatarId={receiver.avatarId || 'cat'} size="sm" />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center text-xs font-extrabold shrink-0">
+                        ?
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Bottom Action Bar for Manual Assignment */}
+                <div className="flex items-center justify-end gap-1.5 pt-2 border-t border-[#E2DDD3]/60">
+                  {receiver && (
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveAssignment(giver.uid)}
+                      className="px-2.5 py-1 text-[11px] font-bold text-rose-700 hover:bg-rose-100 rounded-lg cursor-pointer"
+                    >
+                      배정 해제
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleOpenManualEdit(giver.uid)}
+                    className="px-3 py-1.5 rounded-xl bg-white text-[#141413] text-xs font-bold hover:bg-[#141413] hover:text-white cursor-pointer shadow-xs transition-colors"
+                  >
+                    ✍️ 대상 직접 변경
+                  </button>
                 </div>
               </div>
+            );
+          })}
+        </div>
+      )}
 
-              <span className="text-base font-extrabold text-[#141413]">→</span>
-
-              <div className="flex items-center gap-2.5 text-right">
-                <div>
-                  <span className="text-[10px] font-bold text-emerald-700">대상 친구</span>
-                  <p className="text-sm font-extrabold text-[#141413]">
-                    {receiver?.displayName || '학생'}
-                  </p>
-                </div>
-                <AvatarIllustration avatarId={receiver?.avatarId || 'cat'} size="sm" />
-              </div>
+      {/* Manual Assignment Modal */}
+      {manualModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-[#FBF9F5] rounded-[32px] max-w-md w-full p-6 space-y-4 shadow-xl border border-white">
+            <div className="flex items-center justify-between pb-2 border-b border-[#E2DDD3]">
+              <h3 className="text-lg font-extrabold text-[#141413]">
+                마니또 짝 수동 설정
+              </h3>
+              <button
+                type="button"
+                onClick={() => setManualModalOpen(false)}
+                className="w-8 h-8 rounded-full bg-[#EFECE6] flex items-center justify-center text-sm font-bold cursor-pointer hover:bg-[#E2DDD3]"
+              >
+                ✕
+              </button>
             </div>
-          );
-        })}
-      </div>
+
+            <form onSubmit={handleSaveManualAssignment} className="space-y-4">
+              <div>
+                <label className="block text-xs font-extrabold text-[#141413] mb-1.5">
+                  1. 마니또 (챙겨주는 학생)
+                </label>
+                <select
+                  value={modalGiverUid}
+                  onChange={(e) => setModalGiverUid(e.target.value)}
+                  required
+                  className="w-full rounded-xl bg-white px-3.5 py-2.5 text-xs font-bold text-[#141413] border border-[#E2DDD3]"
+                >
+                  <option value="">학생을 선택하세요</option>
+                  {activeStudents.map((s) => (
+                    <option key={s.uid} value={s.uid}>
+                      {s.displayName} ({s.studentLoginId})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-extrabold text-[#141413] mb-1.5">
+                  2. 챙김받을 친구 (대상 학생)
+                </label>
+                <select
+                  value={modalReceiverUid}
+                  onChange={(e) => setModalReceiverUid(e.target.value)}
+                  required
+                  className="w-full rounded-xl bg-white px-3.5 py-2.5 text-xs font-bold text-[#141413] border border-[#E2DDD3]"
+                >
+                  <option value="">대상 친구를 선택하세요</option>
+                  {activeStudents
+                    .filter((s) => s.uid !== modalGiverUid)
+                    .map((s) => (
+                      <option key={s.uid} value={s.uid}>
+                        {s.displayName} ({s.studentLoginId})
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div className="bg-[#DDD5F8]/40 rounded-2xl p-3 text-xs text-[#3730A3]">
+                💡 교사가 직접 짝을 지정하면, 해당 학생의 마니또 미션과 비밀 편지 대상이 즉시 변경됩니다.
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setManualModalOpen(false)}
+                  className="px-4 py-2.5 rounded-xl bg-[#EFECE6] text-xs font-bold text-[#4A463F] cursor-pointer hover:bg-[#E2DDD3]"
+                >
+                  취소
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingManual}
+                  className="px-5 py-2.5 rounded-xl bg-[#141413] text-white text-xs font-extrabold cursor-pointer hover:bg-[#2C2A27] shadow-xs"
+                >
+                  {savingManual ? '저장 중...' : '배정 저장하기'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -1939,27 +2526,70 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
   loungeMessages,
   onNotify,
 }) => {
-  const [title, setTitle] = useState(loungeSession?.title || '');
+  const sessionId = loungeSession?.sessionId || 'session_shindong_5_2';
+  const currentStatus = loungeSession?.status || 'waiting';
+
+  const [title, setTitle] = useState(
+    loungeSession?.title || '5학년 2반 따뜻한 칭찬 라운지'
+  );
   const [scheduledDate, setScheduledDate] = useState(
     loungeSession?.scheduledDate || new Date().toISOString().slice(0, 10)
   );
   const [startsAt, setStartsAt] = useState(loungeSession?.startsAt || '08:30');
   const [endsAt, setEndsAt] = useState(loungeSession?.endsAt || '16:30');
-  const [noticeRules, setNoticeRules] = useState(loungeSession?.noticeRules || '');
+  const [noticeRules, setNoticeRules] = useState(
+    loungeSession?.noticeRules || '친구의 장점을 칭찬하고 서로를 응원하는 고운 말을 사용해요.'
+  );
 
-  if (!loungeSession) return null;
+  // Teacher Real Name Visibility Toggle (Requested: ON/OFF toggle)
+  const [showRealNames, setShowRealNames] = useState(true);
+  const [batchDeletingMsgs, setBatchDeletingMsgs] = useState(false);
+
+  // Initialize or Open lounge session if none exists
+  const handleInitLoungeSession = async () => {
+    try {
+      const newSession: LoungeSession = {
+        sessionId,
+        workspaceOwnerUid,
+        classId: teacherProfile.classId || '5-2',
+        title: title || '5학년 2반 따뜻한 칭찬 라운지',
+        scheduledDate,
+        startsAt,
+        endsAt,
+        status: 'active',
+        waitingCount: 0,
+        participantCount: 0,
+        createdBy: teacherProfile.uid,
+        noticeRules: noticeRules || '친구의 장점을 칭찬하고 서로를 응원하는 고운 말을 사용해요.',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      await setDoc(doc(db, 'loungeSessions', sessionId), newSession);
+      onNotify('익명 학급 라운지가 즉시 개설되고 [대화 시작] 상태로 전환되었습니다!', 'success');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'loungeSessions');
+    }
+  };
 
   const handleUpdateSchedule = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await updateDoc(doc(db, 'loungeSessions', loungeSession.sessionId), {
-        title: sanitizeText(title, 120),
-        scheduledDate,
-        startsAt,
-        endsAt,
-        noticeRules: sanitizeText(noticeRules, 400),
-        updatedAt: serverTimestamp(),
-      });
+      await setDoc(
+        doc(db, 'loungeSessions', sessionId),
+        {
+          sessionId,
+          workspaceOwnerUid,
+          classId: teacherProfile.classId || '5-2',
+          title: sanitizeText(title, 120),
+          scheduledDate,
+          startsAt,
+          endsAt,
+          noticeRules: sanitizeText(noticeRules, 400),
+          status: currentStatus,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
       onNotify('라운지 운영 일정과 공지 규칙이 저장되었습니다.', 'success');
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, 'loungeSessions');
@@ -1968,17 +2598,29 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
 
   const handleSetStatus = async (status: LoungeSession['status']) => {
     try {
-      await updateDoc(doc(db, 'loungeSessions', loungeSession.sessionId), {
-        status,
-        updatedAt: serverTimestamp(),
-      });
+      await setDoc(
+        doc(db, 'loungeSessions', sessionId),
+        {
+          sessionId,
+          workspaceOwnerUid,
+          classId: teacherProfile.classId || '5-2',
+          title: title || '5학년 2반 따뜻한 칭찬 라운지',
+          scheduledDate,
+          startsAt,
+          endsAt,
+          noticeRules,
+          status,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
       await recordAuditLog({
         workspaceOwnerUid,
         actorUid: teacherProfile.uid,
         actorName: teacherProfile.displayName,
         action: `LOUNGE_STATUS_${status.toUpperCase()}`,
         targetType: 'loungeSession',
-        targetId: loungeSession.sessionId,
+        targetId: sessionId,
         reason: '교사에 의한 익명 라운지 운영 상태 변경',
         metadataSummary: `status -> ${status}`,
       });
@@ -2016,23 +2658,126 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
     }
   };
 
+  // Delete Individual Message Permanently
+  const handleDeleteSingleMessage = async (msg: LoungeMessage) => {
+    if (!confirm(`[${msg.anonymousAlias}] 학생이 작성한 이 대화 메시지를 완전히 삭제하시겠습니까?`)) {
+      return;
+    }
+    try {
+      await deleteDoc(doc(db, 'loungeMessages', msg.messageId));
+      await recordAuditLog({
+        workspaceOwnerUid,
+        actorUid: teacherProfile.uid,
+        actorName: teacherProfile.displayName,
+        action: 'LOUNGE_MSG_DELETED',
+        targetType: 'loungeMessage',
+        targetId: msg.messageId,
+        reason: '교사에 의한 부적절/테스트 대화 개별 메시지 삭제',
+        metadataSummary: `[${msg.anonymousAlias}] ${msg.body.slice(0, 30)}`,
+      });
+      onNotify('메시지가 성공적으로 삭제되었습니다.', 'success');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, 'loungeMessages');
+    }
+  };
+
+  // Batch Delete All Lounge Messages
+  const handleBatchDeleteAllMessages = async () => {
+    if (loungeMessages.length === 0) {
+      onNotify('삭제할 라운지 대화 내용이 없습니다.', 'info');
+      return;
+    }
+    if (
+      !confirm(
+        `현재 라운지에 작성된 대화 메시지 전체(${loungeMessages.length}건)를 일괄 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`
+      )
+    ) {
+      return;
+    }
+
+    setBatchDeletingMsgs(true);
+    try {
+      for (const msg of loungeMessages) {
+        await deleteDoc(doc(db, 'loungeMessages', msg.messageId));
+      }
+      await recordAuditLog({
+        workspaceOwnerUid,
+        actorUid: teacherProfile.uid,
+        actorName: teacherProfile.displayName,
+        action: 'LOUNGE_ALL_MSGS_BATCH_DELETED',
+        targetType: 'loungeSession',
+        targetId: sessionId,
+        reason: '교사에 의한 라운지 대화 기록 전체 일괄 초기화 삭제',
+        metadataSummary: `총 ${loungeMessages.length}건 대화 일괄 영구 삭제 완료`,
+      });
+      onNotify(`라운지 대화 ${loungeMessages.length}건이 모두 일괄 삭제되었습니다.`, 'success');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, 'loungeMessages');
+    } finally {
+      setBatchDeletingMsgs(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
-      <div>
-        <p className="text-xs font-semibold text-[#6B665E] mb-1">
-          라운지 운영 시간 설정 · 대기실/대화방 제어 · 작성자 실명 안전 확인
-        </p>
-        <h1 className="text-2xl sm:text-3xl font-extrabold text-[#141413]">
-          익명 학급 라운지 운영 및 대화 기록 관리
-        </h1>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold text-[#6B665E] mb-1">
+            라운지 운영 시간 설정 · 대기실/대화방 제어 · 실명 표시 ON/OFF 및 대화 관리
+          </p>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-[#141413]">
+            익명 학급 라운지 운영 및 대화 기록 관리
+          </h1>
+        </div>
+
+        {/* Real-Name ON/OFF Toggle */}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowRealNames(!showRealNames)}
+            className={`px-4 py-2.5 rounded-2xl text-xs font-extrabold cursor-pointer flex items-center gap-2 transition-all shadow-xs ${
+              showRealNames
+                ? 'bg-[#141413] text-white hover:bg-[#2C2A27]'
+                : 'bg-[#DDD5F8] text-[#3730A3] hover:bg-[#C9BFF3]'
+            }`}
+            title="교사 화면에서 학생들의 실명을 표시하거나 숨길 수 있습니다"
+          >
+            {showRealNames ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+            <span>학생 실명 확인: {showRealNames ? 'ON (실명 표시 중)' : 'OFF (익명 별명만 표시)'}</span>
+          </button>
+        </div>
       </div>
+
+      {/* If Lounge Session was missing or not created yet */}
+      {!loungeSession && (
+        <div className="bg-[#FEF3C7] border border-amber-300 rounded-[24px] p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0" />
+            <div>
+              <p className="text-xs font-extrabold text-amber-900">
+                아직 생성된 라운지 세션 문서가 없습니다.
+              </p>
+              <p className="text-[11px] text-amber-800">
+                아래 버튼을 누르면 라운지가 즉시 개설되어 학생들이 입장할 수 있습니다.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleInitLoungeSession}
+            className="px-4 py-2 rounded-xl bg-amber-700 text-white text-xs font-extrabold hover:bg-amber-800 cursor-pointer shrink-0 shadow-xs"
+          >
+            ✨ 라운지 운영 즉시 시작하기
+          </button>
+        </div>
+      )}
 
       {/* Status Control Buttons */}
       <div className="bg-[#DDD5F8] rounded-[28px] p-6 flex flex-wrap items-center justify-between gap-4">
         <div>
           <span className="text-xs font-bold text-[#3730A3]">현재 라운지 상태 제어</span>
           <h2 className="text-lg font-extrabold text-[#141413] mt-0.5">
-            현재 상태: {loungeSession.status.toUpperCase()}
+            현재 상태: {currentStatus.toUpperCase()}
           </h2>
         </div>
 
@@ -2048,10 +2793,10 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
             <button
               key={btn.id}
               onClick={() => handleSetStatus(btn.id)}
-              className={`px-4 py-2 rounded-xl text-xs font-bold cursor-pointer ${
-                loungeSession.status === btn.id
-                  ? 'bg-[#141413] text-white'
-                  : 'bg-white text-[#141413]'
+              className={`px-4 py-2 rounded-xl text-xs font-bold cursor-pointer transition-colors ${
+                currentStatus === btn.id
+                  ? 'bg-[#141413] text-white shadow-xs'
+                  : 'bg-white text-[#141413] hover:bg-white/80'
               }`}
             >
               {btn.label}
@@ -2072,27 +2817,27 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="라운지 제목"
-            className="rounded-xl bg-white px-3.5 py-2 text-xs md:col-span-2"
+            className="rounded-xl bg-white px-3.5 py-2 text-xs md:col-span-2 font-bold"
           />
           <input
             type="date"
             value={scheduledDate}
             onChange={(e) => setScheduledDate(e.target.value)}
-            className="rounded-xl bg-white px-3.5 py-2 text-xs"
+            className="rounded-xl bg-white px-3.5 py-2 text-xs font-bold"
           />
           <div className="flex items-center gap-1.5">
             <input
               type="time"
               value={startsAt}
               onChange={(e) => setStartsAt(e.target.value)}
-              className="rounded-xl bg-white px-2.5 py-2 text-xs w-full"
+              className="rounded-xl bg-white px-2.5 py-2 text-xs w-full font-bold"
             />
             <span>~</span>
             <input
               type="time"
               value={endsAt}
               onChange={(e) => setEndsAt(e.target.value)}
-              className="rounded-xl bg-white px-2.5 py-2 text-xs w-full"
+              className="rounded-xl bg-white px-2.5 py-2 text-xs w-full font-bold"
             />
           </div>
         </div>
@@ -2102,56 +2847,160 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
             value={noticeRules}
             onChange={(e) => setNoticeRules(e.target.value)}
             placeholder="대화 규칙 공지 문구"
-            className="flex-1 rounded-xl bg-white px-3.5 py-2 text-xs"
+            className="flex-1 rounded-xl bg-white px-3.5 py-2 text-xs font-bold"
           />
           <button
             type="submit"
-            className="px-5 py-2 rounded-xl bg-[#141413] text-white text-xs font-bold cursor-pointer"
+            className="px-5 py-2 rounded-xl bg-[#141413] text-white text-xs font-bold cursor-pointer hover:bg-[#2C2A27]"
           >
             일정 및 공지 저장
           </button>
         </div>
       </form>
 
-      {/* Teacher Message Moderation Log (Shows Real Student Name ONLY to Teacher) */}
-      <div className="bg-[#F3EFEA] rounded-[28px] p-6 space-y-3">
-        <h3 className="text-base font-extrabold text-[#141413]">
-          라운지 전체 대화 기록 및 안전 관리 (교사 전용 실명 매핑)
-        </h3>
-        <div className="space-y-2">
-          {loungeMessages.map((msg) => {
-            const realStu = allUsers.find((u) => u.uid === msg.senderUid);
-            return (
-              <div
-                key={msg.messageId}
-                className={`rounded-2xl p-4 flex items-center justify-between gap-3 ${
-                  msg.moderationStatus === 'hidden' ? 'bg-rose-50 opacity-60' : 'bg-white'
-                }`}
-              >
-                <div>
-                  <p className="text-xs font-bold text-[#141413]">
-                    익명 별명: [{msg.anonymousAlias}]{' '}
-                    <span className="text-[#6B665E] font-normal">
-                      (실제 작성 학생: {realStu?.displayName || msg.senderUid})
-                    </span>
-                  </p>
-                  <p className="text-xs text-[#3D3A35] mt-1">{msg.body}</p>
-                </div>
+      {/* Active Participants List */}
+      <div className="bg-[#E0F2FE] rounded-[28px] p-6 space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-extrabold text-[#0369A1]">
+            현재 라운지 접속 / 대기 참여자 ({loungeParticipants.length}명)
+          </h3>
+          <span className="text-xs text-[#0284C7] font-bold">
+            {showRealNames ? '실명 매핑 표시 중' : '익명 모드'}
+          </span>
+        </div>
 
-                <button
-                  onClick={() => handleToggleHideMessage(msg)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer shrink-0 ${
+        {loungeParticipants.length === 0 ? (
+          <p className="text-xs text-[#0284C7]">현재 접속 중인 참여자가 없습니다.</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {loungeParticipants.map((p) => {
+              const realStu = allUsers.find((u) => u.uid === p.participantUid);
+              return (
+                <div
+                  key={p.participantUid}
+                  className="bg-white px-3 py-1.5 rounded-xl border border-[#BAE6FD] flex items-center gap-1.5 text-xs font-bold shadow-xs"
+                >
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span className="text-[#141413]">[{p.anonymousAlias}]</span>
+                  {showRealNames && (
+                    <span className="text-indigo-700 font-extrabold ml-1">
+                      (실명: {realStu ? `${realStu.displayName} (${realStu.studentLoginId})` : '학생'})
+                    </span>
+                  )}
+                  <span className="text-[10px] text-[#6B665E]">
+                    {p.presenceStatus === 'waiting' ? '대기 중' : '대화방'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Teacher Message Moderation & Delete Log */}
+      <div className="bg-[#F3EFEA] rounded-[28px] p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-[#E2DDD3]">
+          <div>
+            <h3 className="text-base font-extrabold text-[#141413]">
+              라운지 전체 대화 기록 관리 (총 {loungeMessages.length}건)
+            </h3>
+            <p className="text-xs text-[#6B665E]">
+              부적절한 대화는 숨김 처리하거나 영구 삭제할 수 있으며, 전체 대화를 일괄 초기화할 수 있습니다.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={batchDeletingMsgs || loungeMessages.length === 0}
+              onClick={handleBatchDeleteAllMessages}
+              className="px-3.5 py-2 rounded-xl bg-rose-600 text-white text-xs font-extrabold hover:bg-rose-700 cursor-pointer flex items-center gap-1.5 shadow-xs disabled:opacity-50"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{batchDeletingMsgs ? '삭제 중...' : '대화 내용 전체 일괄 삭제'}</span>
+            </button>
+          </div>
+        </div>
+
+        {loungeMessages.length === 0 ? (
+          <div className="bg-white rounded-2xl p-8 text-center text-xs text-[#6B665E]">
+            아직 작성된 라운지 대화 메시지가 없습니다.
+          </div>
+        ) : (
+          <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
+            {loungeMessages.map((msg) => {
+              const realStu = allUsers.find((u) => u.uid === msg.senderUid);
+              return (
+                <div
+                  key={msg.messageId}
+                  className={`rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border ${
                     msg.moderationStatus === 'hidden'
-                      ? 'bg-[#141413] text-white'
-                      : 'bg-rose-100 text-rose-700'
+                      ? 'bg-rose-50 border-rose-200 opacity-70'
+                      : 'bg-white border-[#E8E4DC]'
                   }`}
                 >
-                  {msg.moderationStatus === 'hidden' ? '숨김 해제' : '메시지 숨김'}
-                </button>
-              </div>
-            );
-          })}
-        </div>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-extrabold text-[#141413]">
+                        [{msg.anonymousAlias}]
+                      </span>
+
+                      {/* Real Student Name Display (Toggled by Teacher) */}
+                      {showRealNames && (
+                        <span className="px-2 py-0.5 rounded-lg bg-indigo-100 text-indigo-900 font-extrabold text-[11px]">
+                          실명: {realStu ? `${realStu.displayName} (${realStu.studentLoginId})` : '등록 학생 없음'}
+                        </span>
+                      )}
+
+                      <span className="text-[10px] text-[#8C827A] tabular-nums">
+                        {typeof msg.createdAt === 'string'
+                          ? new Date(msg.createdAt).toLocaleTimeString('ko-KR', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })
+                          : ''}
+                      </span>
+
+                      {msg.moderationStatus === 'hidden' && (
+                        <span className="px-2 py-0.5 rounded-md bg-rose-200 text-rose-800 text-[10px] font-bold">
+                          숨김 상태
+                        </span>
+                      )}
+                    </div>
+
+                    <p className="text-xs text-[#3D3A35] leading-relaxed break-words">
+                      {msg.body}
+                    </p>
+                  </div>
+
+                  {/* Moderation Action Buttons: Toggle Hide & Delete Single Message */}
+                  <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center">
+                    <button
+                      type="button"
+                      onClick={() => handleToggleHideMessage(msg)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer ${
+                        msg.moderationStatus === 'hidden'
+                          ? 'bg-[#141413] text-white hover:bg-[#2C2A27]'
+                          : 'bg-amber-100 text-amber-900 hover:bg-amber-200'
+                      }`}
+                    >
+                      {msg.moderationStatus === 'hidden' ? '숨김 해제' : '숨기기'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteSingleMessage(msg)}
+                      className="px-2.5 py-1.5 rounded-xl bg-rose-100 text-rose-700 text-xs font-bold hover:bg-rose-200 cursor-pointer flex items-center gap-1"
+                      title="이 메시지를 완전히 삭제"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>삭제</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2246,6 +3095,7 @@ const TeacherStatsView: React.FC<TeacherContextProps> = ({
 const TeacherSettingsAndAuditView: React.FC<TeacherContextProps> = ({
   workspaceOwnerUid,
   teacherProfile,
+  currentClass,
   auditLogs,
   appSettings,
   onNotify,
@@ -2346,16 +3196,168 @@ const TeacherSettingsAndAuditView: React.FC<TeacherContextProps> = ({
     }
   };
 
+  // Teacher Profile State
+  // Teacher Profile & Classroom Info State
+  const [profileDisplayName, setProfileDisplayName] = useState(teacherProfile.displayName);
+  const [profileAvatarId, setProfileAvatarId] = useState(teacherProfile.avatarId || 'teacher');
+  const [profileBio, setProfileBio] = useState(teacherProfile.bio || '');
+  const [settingsSchoolName, setSettingsSchoolName] = useState(
+    currentClass?.schoolName || '전주신동초등학교'
+  );
+  const [settingsClassName, setSettingsClassName] = useState(
+    currentClass?.name || '5학년 2반'
+  );
+  const [savingProfile, setSavingProfile] = useState(false);
+
+  // Sync state whenever currentClass or teacherProfile updates
+  React.useEffect(() => {
+    if (currentClass) {
+      setSettingsSchoolName(currentClass.schoolName || '전주신동초등학교');
+      setSettingsClassName(currentClass.name || '5학년 2반');
+    }
+  }, [currentClass]);
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profileDisplayName.trim()) {
+      onNotify('선생님 성함을 입력해 주세요.', 'error');
+      return;
+    }
+    if (!settingsClassName.trim()) {
+      onNotify('학급 이름을 입력해 주세요.', 'error');
+      return;
+    }
+    setSavingProfile(true);
+    try {
+      await updateTeacherProfile({
+        workspaceOwnerUid,
+        teacherUid: teacherProfile.uid,
+        displayName: profileDisplayName.trim(),
+        avatarId: profileAvatarId,
+        bio: profileBio.trim(),
+        classId: settingsClassName.trim(),
+        className: settingsClassName.trim(),
+        schoolName: settingsSchoolName.trim() || '전주신동초등학교',
+      });
+      onNotify('교사 성함과 학급 정보(학교명, 학급 이름)가 성공적으로 저장되었습니다!', 'success');
+    } catch (err) {
+      onNotify('프로필 변경 오류: ' + (err instanceof Error ? err.message : String(err)), 'error');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
         <p className="text-xs font-semibold text-[#6B665E] mb-1">
-          교사 관리자 비밀번호 변경 · 학급 안전 정책 설정 · 감사 로그(Audit Logs)
+          교사 관리자 비밀번호 변경 · 교사 프로필/이름 수정 · 학급 이름 및 학교명 설정 · 감사 로그
         </p>
         <h1 className="text-2xl sm:text-3xl font-extrabold text-[#141413]">
           교사 보안 설정 및 감사 로그
         </h1>
       </div>
+
+      {/* Teacher Profile & Classroom Info Edit Form */}
+      <form
+        onSubmit={handleSaveProfile}
+        className="bg-[#DDD5F8]/50 rounded-[28px] p-6 space-y-4 border border-[#C9BFF3]"
+      >
+        <div>
+          <h2 className="text-base font-extrabold text-[#141413]">
+            👨‍🏫 교사 프로필 및 학급 정보 수정
+          </h2>
+          <p className="text-xs text-[#3D3A35] mt-0.5">
+            선생님의 성함, 학교명, 학급 이름(반 명칭), 캐릭터 아바타, 소개 문구를 변경합니다. 변경 즉시 화면 상단과 로그인 명단에 반영됩니다.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <label className="block text-xs font-bold text-[#141413] mb-1">
+              선생님 성함 / 표시 이름
+            </label>
+            <input
+              type="text"
+              value={profileDisplayName}
+              onChange={(e) => setProfileDisplayName(e.target.value)}
+              required
+              className="w-full rounded-xl bg-white px-3.5 py-2 text-xs font-bold text-[#141413]"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-[#141413] mb-1">
+              학교명
+            </label>
+            <input
+              type="text"
+              value={settingsSchoolName}
+              onChange={(e) => setSettingsSchoolName(e.target.value)}
+              placeholder="예: 전주신동초등학교"
+              required
+              className="w-full rounded-xl bg-white px-3.5 py-2 text-xs font-bold text-[#141413]"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-[#141413] mb-1">
+              학급 명칭 (반 이름)
+            </label>
+            <input
+              type="text"
+              value={settingsClassName}
+              onChange={(e) => setSettingsClassName(e.target.value)}
+              placeholder="예: 5학년 2반"
+              required
+              className="w-full rounded-xl bg-white px-3.5 py-2 text-xs font-bold text-[#141413]"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-bold text-[#141413] mb-1">
+            선생님 캐릭터 아바타
+          </label>
+          <div className="grid grid-cols-4 sm:grid-cols-6 gap-2 max-h-32 overflow-y-auto p-1.5 bg-white rounded-2xl border border-[#E2DDD3]">
+            {AVATAR_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setProfileAvatarId(opt.id)}
+                className={`p-2 rounded-xl flex flex-col items-center gap-1 cursor-pointer transition-all ${
+                  profileAvatarId === opt.id
+                    ? 'bg-[#141413] text-white ring-2 ring-[#141413]'
+                    : 'hover:bg-[#F3EFEA] text-[#141413]'
+                }`}
+              >
+                <AvatarIllustration avatarId={opt.id} size="sm" />
+                <span className="text-[10px] font-bold truncate max-w-full">{opt.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-bold text-[#141413] mb-1">
+            학급 인사말 및 소개 문구
+          </label>
+          <textarea
+            rows={2}
+            value={profileBio}
+            onChange={(e) => setProfileBio(e.target.value)}
+            className="w-full rounded-xl bg-white p-3 text-xs text-[#141413]"
+          />
+        </div>
+
+        <div className="flex justify-end">
+          <button
+            type="submit"
+            disabled={savingProfile}
+            className="px-5 py-2.5 rounded-xl bg-[#141413] text-white text-xs font-extrabold cursor-pointer hover:bg-[#2C2A27] shadow-xs"
+          >
+            {savingProfile ? '저장 중...' : '교사 프로필 및 학급 정보 저장'}
+          </button>
+        </div>
+      </form>
 
       {/* Teacher Admin ID & Password Security Form */}
       <form

@@ -780,7 +780,9 @@ export async function createStudentsBatch(params: {
 }
 
 /**
- * Batch deletes multiple students from Firestore
+ * Batch deletes multiple students from Firestore with FULL CASCADE DELETION
+ * of their mission submissions, score ledger entries, badge awards,
+ * manitto assignments, letters, and lounge messages.
  */
 export async function deleteStudentsBatch(params: {
   workspaceOwnerUid: string;
@@ -791,29 +793,428 @@ export async function deleteStudentsBatch(params: {
   const { workspaceOwnerUid, teacherUid, teacherName, students } = params;
   if (students.length === 0) return { count: 0 };
 
-  const deletePromises = students.map(async (stu) => {
-    await deleteDoc(doc(db, 'users', stu.uid));
+  const targetUids = new Set(students.map((s) => s.uid));
+
+  // 1. Delete users & studentStats
+  const directDeletes = students.map(async (stu) => {
+    try {
+      await deleteDoc(doc(db, 'users', stu.uid));
+    } catch {
+      // Ignore if absent
+    }
     try {
       await deleteDoc(doc(db, 'studentStats', stu.uid));
     } catch {
-      // Ignore if stat doc was already absent
+      // Ignore if absent
     }
   });
 
-  await Promise.all(deletePromises);
+  // 2. Cascade delete mission submissions
+  const subSnap = await getDocs(
+    query(collection(db, 'missionSubmissions'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  const subDeletes = subSnap.docs
+    .filter((d) => targetUids.has(d.data().studentUid))
+    .map((d) => deleteDoc(doc(db, 'missionSubmissions', d.id)));
+
+  // 3. Cascade delete score ledger
+  const ledgerSnap = await getDocs(
+    query(collection(db, 'scoreLedger'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  const ledgerDeletes = ledgerSnap.docs
+    .filter((d) => targetUids.has(d.data().studentUid))
+    .map((d) => deleteDoc(doc(db, 'scoreLedger', d.id)));
+
+  // 4. Cascade delete badge awards
+  const awardSnap = await getDocs(
+    query(collection(db, 'badgeAwards'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  const awardDeletes = awardSnap.docs
+    .filter((d) => targetUids.has(d.data().studentUid))
+    .map((d) => deleteDoc(doc(db, 'badgeAwards', d.id)));
+
+  // 5. Cascade delete manitto assignments
+  const assignSnap = await getDocs(
+    query(collection(db, 'manittoAssignments'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  const assignDeletes = assignSnap.docs
+    .filter((d) => targetUids.has(d.data().giverUid) || targetUids.has(d.data().receiverUid))
+    .map((d) => deleteDoc(doc(db, 'manittoAssignments', d.id)));
+
+  // 6. Cascade delete letters
+  const letterSnap = await getDocs(
+    query(collection(db, 'letters'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  const letterDeletes = letterSnap.docs
+    .filter((d) => targetUids.has(d.data().senderUid) || targetUids.has(d.data().receiverUid))
+    .map((d) => deleteDoc(doc(db, 'letters', d.id)));
+
+  // 7. Cascade delete lounge messages
+  const msgSnap = await getDocs(
+    query(collection(db, 'loungeMessages'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  const msgDeletes = msgSnap.docs
+    .filter((d) => targetUids.has(d.data().senderUid))
+    .map((d) => deleteDoc(doc(db, 'loungeMessages', d.id)));
+
+  await Promise.all([
+    ...directDeletes,
+    ...subDeletes,
+    ...ledgerDeletes,
+    ...awardDeletes,
+    ...assignDeletes,
+    ...letterDeletes,
+    ...msgDeletes,
+  ]);
 
   await recordAuditLog({
     workspaceOwnerUid,
     actorUid: teacherUid,
     actorName: teacherName,
-    action: 'STUDENTS_BATCH_DELETED',
+    action: 'STUDENTS_CASCADE_DELETED',
     targetType: 'users',
     targetId: `${students.length}_students`,
-    reason: `교사 요청에 의한 학생 ${students.length}명 일괄 계정 및 통계 삭제`,
+    reason: `교사 요청에 의한 학생 ${students.length}명 및 연계 활동 데이터(미션, 원장, 편지, 마니또 배정) 영구 삭제`,
     metadataSummary: students.map((s) => s.displayName).join(', ').slice(0, 380),
   });
 
   return { count: students.length };
+}
+
+/**
+ * Cleans up orphaned activity records whose studentUid or participantUid no longer exists in users
+ */
+export async function cleanupOrphanedActivityData(params: {
+  workspaceOwnerUid: string;
+  teacherUid: string;
+  teacherName: string;
+}): Promise<{ cleanedCount: number }> {
+  const { workspaceOwnerUid, teacherUid, teacherName } = params;
+
+  // 1. Get all current user UIDs
+  const usersSnap = await getDocs(
+    query(collection(db, 'users'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  const activeUids = new Set(usersSnap.docs.map((d) => d.data().uid));
+
+  let cleaned = 0;
+
+  // 2. Cleanup orphaned missionSubmissions
+  const subSnap = await getDocs(
+    query(collection(db, 'missionSubmissions'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  const deadSubs = subSnap.docs.filter((d) => !activeUids.has(d.data().studentUid));
+  cleaned += deadSubs.length;
+  await Promise.all(deadSubs.map((d) => deleteDoc(doc(db, 'missionSubmissions', d.id))));
+
+  // 3. Cleanup orphaned scoreLedger
+  const ledgerSnap = await getDocs(
+    query(collection(db, 'scoreLedger'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  const deadLedgers = ledgerSnap.docs.filter((d) => !activeUids.has(d.data().studentUid));
+  cleaned += deadLedgers.length;
+  await Promise.all(deadLedgers.map((d) => deleteDoc(doc(db, 'scoreLedger', d.id))));
+
+  // 4. Cleanup orphaned badgeAwards
+  const awardSnap = await getDocs(
+    query(collection(db, 'badgeAwards'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  const deadAwards = awardSnap.docs.filter((d) => !activeUids.has(d.data().studentUid));
+  cleaned += deadAwards.length;
+  await Promise.all(deadAwards.map((d) => deleteDoc(doc(db, 'badgeAwards', d.id))));
+
+  // 5. Cleanup orphaned manittoAssignments
+  const assignSnap = await getDocs(
+    query(collection(db, 'manittoAssignments'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  const deadAssigns = assignSnap.docs.filter(
+    (d) => !activeUids.has(d.data().giverUid) || !activeUids.has(d.data().receiverUid)
+  );
+  cleaned += deadAssigns.length;
+  await Promise.all(deadAssigns.map((d) => deleteDoc(doc(db, 'manittoAssignments', d.id))));
+
+  // 6. Cleanup orphaned letters
+  const letterSnap = await getDocs(
+    query(collection(db, 'letters'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  const deadLetters = letterSnap.docs.filter(
+    (d) => !activeUids.has(d.data().senderUid) || !activeUids.has(d.data().receiverUid)
+  );
+  cleaned += deadLetters.length;
+  await Promise.all(deadLetters.map((d) => deleteDoc(doc(db, 'letters', d.id))));
+
+  // 7. Cleanup orphaned loungeMessages
+  const msgSnap = await getDocs(
+    query(collection(db, 'loungeMessages'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  const deadMsgs = msgSnap.docs.filter((d) => !activeUids.has(d.data().senderUid));
+  cleaned += deadMsgs.length;
+  await Promise.all(deadMsgs.map((d) => deleteDoc(doc(db, 'loungeMessages', d.id))));
+
+  await recordAuditLog({
+    workspaceOwnerUid,
+    actorUid: teacherUid,
+    actorName: teacherName,
+    action: 'ORPHANED_DATA_CLEANED',
+    targetType: 'classroomActivities',
+    targetId: 'all',
+    reason: '학생 없는 고아 활동 데이터 자동 정리 완료',
+    metadataSummary: `총 ${cleaned}건의 고아 활동 기록 삭제`,
+  });
+
+  return { cleanedCount: cleaned };
+}
+
+/**
+ * Completely resets all classroom activity records back to zero for the current students
+ */
+export async function resetAllClassroomActivities(params: {
+  workspaceOwnerUid: string;
+  teacherUid: string;
+  teacherName: string;
+}): Promise<void> {
+  const { workspaceOwnerUid, teacherUid, teacherName } = params;
+
+  // 1. Delete all missionSubmissions
+  const subSnap = await getDocs(
+    query(collection(db, 'missionSubmissions'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  await Promise.all(subSnap.docs.map((d) => deleteDoc(doc(db, 'missionSubmissions', d.id))));
+
+  // 2. Delete all scoreLedger
+  const ledgerSnap = await getDocs(
+    query(collection(db, 'scoreLedger'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  await Promise.all(ledgerSnap.docs.map((d) => deleteDoc(doc(db, 'scoreLedger', d.id))));
+
+  // 3. Delete all badgeAwards
+  const awardSnap = await getDocs(
+    query(collection(db, 'badgeAwards'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  await Promise.all(awardSnap.docs.map((d) => deleteDoc(doc(db, 'badgeAwards', d.id))));
+
+  // 4. Delete all letters
+  const letterSnap = await getDocs(
+    query(collection(db, 'letters'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  await Promise.all(letterSnap.docs.map((d) => deleteDoc(doc(db, 'letters', d.id))));
+
+  // 5. Delete all loungeMessages
+  const msgSnap = await getDocs(
+    query(collection(db, 'loungeMessages'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  await Promise.all(msgSnap.docs.map((d) => deleteDoc(doc(db, 'loungeMessages', d.id))));
+
+  // 6. Reset all studentStats back to 0
+  const statsSnap = await getDocs(
+    query(collection(db, 'studentStats'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  await Promise.all(
+    statsSnap.docs.map((d) =>
+      updateDoc(doc(db, 'studentStats', d.id), {
+        totalPoints: 0,
+        completedMissionCount: 0,
+        earnedBadgeCount: 0,
+        updatedAt: serverTimestamp(),
+      })
+    )
+  );
+
+  await recordAuditLog({
+    workspaceOwnerUid,
+    actorUid: teacherUid,
+    actorName: teacherName,
+    action: 'CLASSROOM_ACTIVITIES_RESET',
+    targetType: 'classroomActivities',
+    targetId: 'all',
+    reason: '교사 관리자에 의한 학급 전체 마니또 활동 기록 초기화 (점수, 미션, 편지 0으로 리셋)',
+    metadataSummary: '미션, 점수원장, 뱃지, 편지, 라운지 메시지 전체 초기화 완료',
+  });
+}
+
+/**
+ * Updates classroom name and school name in Firestore classes collection
+ */
+export async function updateClassroomInfo(params: {
+  workspaceOwnerUid: string;
+  teacherUid: string;
+  teacherName: string;
+  className: string;
+  schoolName: string;
+}): Promise<void> {
+  const { workspaceOwnerUid, teacherUid, teacherName, className, schoolName } = params;
+  const cleanClassName = sanitizeText(className, 80) || '5학년 2반';
+  const cleanSchoolName = sanitizeText(schoolName, 80) || '전주신동초등학교';
+
+  const classSnap = await getDocs(
+    query(collection(db, 'classes'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+
+  if (!classSnap.empty) {
+    await Promise.all(
+      classSnap.docs.map((d) =>
+        updateDoc(doc(db, 'classes', d.id), {
+          name: cleanClassName,
+          schoolName: cleanSchoolName,
+          updatedAt: serverTimestamp(),
+        })
+      )
+    );
+  } else {
+    const prefix = workspaceOwnerUid.slice(0, 8);
+    const targetClassId = `${prefix}_class_5_2`;
+    await setDoc(doc(db, 'classes', targetClassId), {
+      classId: targetClassId,
+      workspaceOwnerUid,
+      name: cleanClassName,
+      schoolName: cleanSchoolName,
+      teacherUids: [teacherUid],
+      active: true,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  await recordAuditLog({
+    workspaceOwnerUid,
+    actorUid: teacherUid,
+    actorName: teacherName,
+    action: 'CLASSROOM_INFO_UPDATED',
+    targetType: 'classes',
+    targetId: 'main',
+    reason: `학급 명칭("${cleanClassName}") 및 학교명("${cleanSchoolName}") 수정`,
+    metadataSummary: `className: ${cleanClassName}, schoolName: ${cleanSchoolName}`,
+  });
+}
+
+/**
+ * Updates teacher profile name, avatar, bio, and classroom name
+ */
+export async function updateTeacherProfile(params: {
+  workspaceOwnerUid: string;
+  teacherUid: string;
+  displayName: string;
+  avatarId: string;
+  bio: string;
+  classId?: string;
+  className?: string;
+  schoolName?: string;
+}): Promise<void> {
+  const { workspaceOwnerUid, teacherUid, displayName, avatarId, bio, classId, className, schoolName } = params;
+
+  const userUpdates: Record<string, unknown> = {
+    displayName: sanitizeText(displayName, 60),
+    avatarId,
+    bio: sanitizeText(bio, 300),
+    updatedAt: serverTimestamp(),
+  };
+  if (classId) {
+    userUpdates.classId = sanitizeText(classId, 40);
+  }
+
+  await updateDoc(doc(db, 'users', teacherUid), userUpdates);
+
+  if (className || schoolName) {
+    await updateClassroomInfo({
+      workspaceOwnerUid,
+      teacherUid,
+      teacherName: displayName,
+      className: className || '5학년 2반',
+      schoolName: schoolName || '전주신동초등학교',
+    });
+  }
+
+  await recordAuditLog({
+    workspaceOwnerUid,
+    actorUid: teacherUid,
+    actorName: displayName,
+    action: 'TEACHER_PROFILE_UPDATED',
+    targetType: 'user',
+    targetId: teacherUid,
+    reason: '교사 관리자 프로필 정보(이름, 소개, 아바타, 학급 정보) 수정',
+    metadataSummary: `displayName: ${displayName}, avatarId: ${avatarId}, className: ${className || ''}, schoolName: ${schoolName || ''}`,
+  });
+}
+
+/**
+ * Regenerates circular derangement assignments for ALL active students in the classroom
+ */
+export async function generateFullClassroomAssignments(params: {
+  workspaceOwnerUid: string;
+  teacherUid: string;
+  teacherName: string;
+  classId: string;
+  activeStudents: UserProfile[];
+}): Promise<{ count: number }> {
+  const { workspaceOwnerUid, teacherUid, teacherName, classId, activeStudents } = params;
+  if (activeStudents.length < 2) {
+    throw new Error('마니또 배정은 활성 학생이 최소 2명 이상이어야 합니다.');
+  }
+
+  const prefix = workspaceOwnerUid.slice(0, 8);
+  const startsAt = new Date().toISOString().slice(0, 10);
+  const endsAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  // 1. Delete all old assignments and their letter threads
+  const oldAssignSnap = await getDocs(
+    query(collection(db, 'manittoAssignments'), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+  );
+  await Promise.all(oldAssignSnap.docs.map((d) => deleteDoc(doc(db, 'manittoAssignments', d.id))));
+
+  // 2. Circular derangement: shuffle all active students
+  const shuffled = [...activeStudents].sort(() => Math.random() - 0.5);
+
+  const createPromises = shuffled.map(async (giver, idx) => {
+    const receiver = shuffled[(idx + 1) % shuffled.length];
+    const assignId = `${prefix}_assign_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`;
+    const threadId = `${prefix}_thread_${assignId.slice(-10)}`;
+
+    const aPromise = setDoc(doc(db, 'manittoAssignments', assignId), {
+      assignmentId: assignId,
+      workspaceOwnerUid,
+      classId,
+      giverUid: giver.uid,
+      receiverUid: receiver.uid,
+      active: true,
+      startsAt,
+      endsAt,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    const tPromise = setDoc(doc(db, 'letterThreads', threadId), {
+      threadId,
+      workspaceOwnerUid,
+      classId,
+      assignmentId: assignId,
+      participantUids: [giver.uid, receiverUidSafe(receiver.uid)],
+      lastMessageAt: new Date().toISOString(),
+      status: 'active',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    return Promise.all([aPromise, tPromise]);
+  });
+
+  function receiverUidSafe(uid: string) {
+    return uid;
+  }
+
+  await Promise.all(createPromises);
+
+  await recordAuditLog({
+    workspaceOwnerUid,
+    actorUid: teacherUid,
+    actorName: teacherName,
+    action: 'FULL_MANITTO_REGENERATED',
+    targetType: 'manittoAssignments',
+    targetId: `${activeStudents.length}_students`,
+    reason: `교사에 의한 전체 학생 ${activeStudents.length}명 순환 마니또 배정 생성`,
+    metadataSummary: `총 ${activeStudents.length}명 전원 1:1 순환 배정 완료`,
+  });
+
+  return { count: activeStudents.length };
 }
 
 /**

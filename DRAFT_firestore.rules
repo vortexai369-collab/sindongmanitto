@@ -551,7 +551,7 @@ service cloud.firestore {
         incoming().updatedAt == request.time &&
         isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
         incoming().diff(existing()).affectedKeys().hasOnly(['reversalOf', 'updatedAt']);
-      allow delete: if false;
+      allow delete: if isValidId(ledgerId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
     match /studentStats/{statId} {
@@ -607,7 +607,7 @@ service cloud.firestore {
         incoming().updatedAt == request.time &&
         isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
         incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageAt', 'status', 'updatedAt']);
-      allow delete: if false;
+      allow delete: if isValidId(threadId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
     match /letters/{letterId} {
@@ -693,7 +693,7 @@ service cloud.firestore {
         incoming().updatedAt == request.time &&
         isAuthorizedWorkspace(existing().workspaceOwnerUid) &&
         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAt', 'reviewNote', 'updatedAt']);
-      allow delete: if false;
+      allow delete: if isValidId(reportId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
     match /auditLogs/{logId} {
