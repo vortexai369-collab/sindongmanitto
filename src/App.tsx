@@ -963,13 +963,14 @@ export default function App() {
                         </div>
                         {item.badge ? (
                           <span
-                            className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold tabular-nums ${
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold tabular-nums flex items-center gap-1 animate-pulse shadow-xs ${
                               active
-                                ? 'bg-white text-[#141413]'
+                                ? 'bg-amber-400 text-[#141413]'
                                 : 'bg-rose-500 text-white'
                             }`}
                           >
-                            {item.badge}
+                            <span>🔔</span>
+                            <span>{item.badge}</span>
                           </span>
                         ) : null}
                       </button>

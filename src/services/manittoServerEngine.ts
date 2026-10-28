@@ -49,6 +49,42 @@ export async function hashPassword(plain: string): Promise<string> {
   return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/**
+ * Web Audio API synthesizer for playing a joyful celebration chime
+ * Works reliably across browsers without needing external audio asset files
+ */
+export function playCelebrationSound(): void {
+  try {
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+
+    // Notes: C5 (523.25Hz), E5 (659.25Hz), G5 (783.99Hz), C6 (1046.50Hz)
+    const notes = [523.25, 659.25, 783.99, 1046.50];
+    notes.forEach((freq, index) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, ctx.currentTime + index * 0.1);
+
+      gain.gain.setValueAtTime(0.01, ctx.currentTime + index * 0.1);
+      gain.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime + index * 0.1 + 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + index * 0.1 + 0.4);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(ctx.currentTime + index * 0.1);
+      osc.stop(ctx.currentTime + index * 0.1 + 0.45);
+    });
+  } catch {
+    // Fail silently if audio context is not allowed without gesture
+  }
+}
+
 export function sanitizeText(input: string, maxLength: number): string {
   return input
     .replace(/[<>]/g, '')

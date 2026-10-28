@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   LayoutGrid,
   Heart,
@@ -72,6 +72,7 @@ import {
   hashPassword,
   sanitizeText,
   containsProfanity,
+  playCelebrationSound,
 } from '../services/manittoServerEngine';
 
 interface StudentContextProps {
@@ -102,11 +103,114 @@ const PASTEL_THEMES = [
   { bg: '#C6F0DF', hoverBg: '#B2E8D2', accent: '#059669', label: '학급 협력' },
 ];
 
+export interface CelebrationData {
+  title: string;
+  subtitle: string;
+  points?: number;
+  badgeName?: string;
+  icon: string;
+}
+
 export const StudentViews: React.FC<StudentContextProps & { activeTab: StudentNavTab }> = (
   props
 ) => {
-  const { activeTab } = props;
+  const { activeTab, currentStudent, submissions, badgeAwards, missions, badges } = props;
   const [selectedMission, setSelectedMission] = useState<Mission | null>(null);
+  const [celebrationData, setCelebrationData] = useState<CelebrationData | null>(null);
+
+  const handleShowCelebration = (data: CelebrationData) => {
+    playCelebrationSound();
+    setCelebrationData(data);
+  };
+
+  useEffect(() => {
+    if (!currentStudent?.uid) return;
+
+    const subKey = `seen_approved_subs_${currentStudent.uid}`;
+    const badgeKey = `seen_badge_awards_${currentStudent.uid}`;
+
+    // Read stored seen submission IDs
+    let seenSubs = new Set<string>();
+    const storedSubs = localStorage.getItem(subKey);
+    if (storedSubs) {
+      try {
+        seenSubs = new Set(JSON.parse(storedSubs));
+      } catch {
+        /* ignore parse error */
+      }
+    } else {
+      // First initialization: seed with existing approved submissions so we don't spam old ones
+      submissions
+        .filter((s) => s.studentUid === currentStudent.uid && s.status === 'approved')
+        .forEach((s) => seenSubs.add(s.submissionId));
+      localStorage.setItem(subKey, JSON.stringify(Array.from(seenSubs)));
+    }
+
+    // Read stored seen badge award IDs
+    let seenBadges = new Set<string>();
+    const storedBadges = localStorage.getItem(badgeKey);
+    if (storedBadges) {
+      try {
+        seenBadges = new Set(JSON.parse(storedBadges));
+      } catch {
+        /* ignore parse error */
+      }
+    } else {
+      // First initialization: seed with existing badge awards
+      badgeAwards
+        .filter((a) => a.studentUid === currentStudent.uid)
+        .forEach((a) => seenBadges.add(a.awardId));
+      localStorage.setItem(badgeKey, JSON.stringify(Array.from(seenBadges)));
+    }
+
+    // Detect newly teacher-approved submissions
+    const newlyApproved = submissions.filter(
+      (s) =>
+        s.studentUid === currentStudent.uid &&
+        s.status === 'approved' &&
+        s.reviewedBy !== 'system_auto' &&
+        !seenSubs.has(s.submissionId)
+    );
+
+    if (newlyApproved.length > 0) {
+      const latest = newlyApproved[newlyApproved.length - 1];
+      const m = missions.find((item) => item.missionId === latest.missionId);
+      const mTitle = m ? m.title : '선생님 승인 미션';
+      const pts = latest.awardedPoints || m?.points || 10;
+
+      handleShowCelebration({
+        title: '👨‍🏫 선생님이 미션을 승인하셨어요!',
+        subtitle: `"${mTitle}" 미션을 선생님께서 확인하시고 승인하셨습니다!`,
+        points: pts,
+        icon: '🌸',
+      });
+
+      newlyApproved.forEach((s) => seenSubs.add(s.submissionId));
+      localStorage.setItem(subKey, JSON.stringify(Array.from(seenSubs)));
+      return;
+    }
+
+    // Detect newly awarded badges
+    const newlyAwarded = badgeAwards.filter(
+      (a) => a.studentUid === currentStudent.uid && !seenBadges.has(a.awardId)
+    );
+
+    if (newlyAwarded.length > 0) {
+      const latestBadgeAward = newlyAwarded[newlyAwarded.length - 1];
+      const b = badges.find((item) => item.badgeId === latestBadgeAward.badgeId);
+      const bName = b ? b.name : '마니또 뱃지';
+
+      handleShowCelebration({
+        title: '🏆 뱃지 획득 완료!',
+        subtitle: `축하해요! 뱃지 진행률 100% 달성하여 "${bName}" 뱃지를 새로 획득했어요!`,
+        badgeName: bName,
+        icon: '🏆',
+      });
+
+      newlyAwarded.forEach((a) => seenBadges.add(a.awardId));
+      localStorage.setItem(badgeKey, JSON.stringify(Array.from(seenBadges)));
+    }
+  }, [submissions, badgeAwards, currentStudent?.uid, missions, badges]);
 
   return (
     <div className="w-full">
@@ -128,7 +232,54 @@ export const StudentViews: React.FC<StudentContextProps & { activeTab: StudentNa
           {...props}
           mission={selectedMission}
           onClose={() => setSelectedMission(null)}
+          onShowCelebration={handleShowCelebration}
         />
+      )}
+
+      {/* Celebration & Badge Unlocked Modal Popup */}
+      {celebrationData && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-[#FBF9F5] border-4 border-amber-300 rounded-[36px] max-w-sm w-full p-6 sm:p-8 text-center space-y-4 shadow-2xl relative overflow-hidden animate-scaleUp">
+            <div className="w-20 h-20 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center text-4xl mx-auto shadow-sm ring-4 ring-amber-200 animate-bounce">
+              {celebrationData.icon}
+            </div>
+
+            <div>
+              <h2 className="text-xl font-extrabold text-[#141413]">
+                {celebrationData.title}
+              </h2>
+              <p className="text-xs text-[#5C574F] mt-1.5 leading-relaxed font-semibold">
+                {celebrationData.subtitle}
+              </p>
+            </div>
+
+            {celebrationData.points && celebrationData.points > 0 ? (
+              <div className="bg-[#C6F0DF] rounded-2xl p-3 border border-emerald-300">
+                <span className="text-xs font-bold text-[#065F46] block">획득 보상 점수</span>
+                <strong className="text-2xl font-extrabold text-[#065F46] tabular-nums">
+                  +{celebrationData.points}점 ★
+                </strong>
+              </div>
+            ) : null}
+
+            {celebrationData.badgeName ? (
+              <div className="bg-[#DDD5F8] rounded-2xl p-3 border border-indigo-300">
+                <span className="text-xs font-bold text-[#3730A3] block">🏆 신규 뱃지 획득!</span>
+                <strong className="text-sm font-extrabold text-[#3730A3]">
+                  {celebrationData.badgeName}
+                </strong>
+              </div>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={() => setCelebrationData(null)}
+              className="w-full py-3 rounded-2xl bg-[#141413] text-white text-xs font-extrabold hover:bg-[#2C2A27] cursor-pointer shadow-md transition-transform active:scale-95"
+            >
+              ✨ 참 잘했어요! 확인
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -548,7 +699,11 @@ const StudentHomeView: React.FC<
  * 2. MISSION SUBMISSION MODAL
  * ========================================================================== */
 const MissionSubmissionModal: React.FC<
-  StudentContextProps & { mission: Mission; onClose: () => void }
+  StudentContextProps & {
+    mission: Mission;
+    onClose: () => void;
+    onShowCelebration: (data: CelebrationData) => void;
+  }
 > = ({
   workspaceOwnerUid,
   currentStudent,
@@ -561,6 +716,7 @@ const MissionSubmissionModal: React.FC<
   appSettings,
   onClose,
   onNotify,
+  onShowCelebration,
 }) => {
   const todayStr = new Date().toISOString().slice(0, 10);
   const [actionDescription, setActionDescription] = useState('');
@@ -593,6 +749,7 @@ const MissionSubmissionModal: React.FC<
         existingSubmissions: submissions,
       });
 
+      let newBadges: string[] = [];
       // Check and award badges automatically if approved
       if (result.status === 'approved') {
         const fakeNewSub: MissionSubmission = {
@@ -611,7 +768,7 @@ const MissionSubmissionModal: React.FC<
           reviewedAt: new Date().toISOString(),
           reviewComment: '',
         };
-        const newBadges = await evaluateAndAwardBadges({
+        newBadges = await evaluateAndAwardBadges({
           workspaceOwnerUid,
           studentUid: currentStudent.uid,
           classId: currentStudent.classId,
@@ -621,17 +778,19 @@ const MissionSubmissionModal: React.FC<
           badges,
           existingAwards: badgeAwards,
         });
-        if (newBadges.length > 0) {
-          onNotify(
-            `${result.message} 새로운 뱃지 [${newBadges.join(', ')}]도 획득했어요!`,
-            'success'
-          );
-        } else {
-          onNotify(result.message, 'success');
-        }
-      } else {
-        onNotify(result.message, 'info');
       }
+
+      // Trigger Celebration Sound and Popup
+      onShowCelebration({
+        title: result.status === 'approved' ? '🎉 미션 실천 완료 및 점수 획득!' : '📩 선생님 확인 미션 제출 완료!',
+        subtitle: result.status === 'approved'
+          ? `[${mission.title}] 미션을 멋지게 완수하여 점수가 반영되었어요!`
+          : `미션이 성공적으로 전송되었어요. 선생님이 확인하신 후 점수가 지급됩니다.`,
+        points: result.status === 'approved' ? mission.points : undefined,
+        badgeName: newBadges.length > 0 ? newBadges.join(', ') : undefined,
+        icon: newBadges.length > 0 ? '🏆' : result.status === 'approved' ? '⭐' : '📝',
+      });
+
       onClose();
     } catch (err) {
       onNotify(err instanceof Error ? err.message : '미션 제출 중 오류가 발생했습니다.', 'error');
@@ -2028,6 +2187,9 @@ const StudentLettersView: React.FC<StudentContextProps> = ({
 /* ============================================================================
  * 8. REAL-TIME ANONYMOUS CLASSROOM LOUNGE VIEW
  * ========================================================================== */
+/* ============================================================================
+ * 8. REAL-TIME ANONYMOUS CLASSROOM LOUNGE VIEW (Auto-Presence & Viewer Count)
+ * ========================================================================== */
 const StudentLoungeView: React.FC<StudentContextProps> = ({
   workspaceOwnerUid,
   currentStudent,
@@ -2046,93 +2208,87 @@ const StudentLoungeView: React.FC<StudentContextProps> = ({
   );
   const currentAlias = myParticipant?.anonymousAlias || ANONYMOUS_ALIASES[0];
 
-  const waitingList = loungeParticipants.filter((p) => p.presenceStatus === 'waiting');
-  const activeList = loungeParticipants.filter((p) => p.presenceStatus === 'active');
-
   const visibleMessages = useMemo(
     () => loungeMessages.filter((m) => m.moderationStatus !== 'hidden'),
     [loungeMessages]
   );
 
-  const handleJoinPresence = async (targetState: 'waiting' | 'active' | 'left') => {
+  // Automatically register & maintain lounge presence on view mount
+  useEffect(() => {
     if (!loungeSession) return;
-    if (targetState === 'active' && loungeSession.status !== 'active') {
-      onNotify('아직 라운지 시작 시간이 아니에요. 대기실에서 잠시 기다려 주세요!', 'info');
-      return;
-    }
-    const partRef = doc(
-      db,
-      'loungeSessions',
-      loungeSession.sessionId,
-      'participants',
-      currentStudent.uid
-    );
-    const nowIso = new Date().toISOString();
+    let isMounted = true;
 
-    try {
-      if (!myParticipant) {
-        const usedAliases = new Set(loungeParticipants.map((p) => p.anonymousAlias));
-        const unusedAliases = ANONYMOUS_ALIASES.filter((a) => !usedAliases.has(a));
-        const assignedAlias =
-          unusedAliases.length > 0
-            ? unusedAliases[Math.floor(Math.random() * unusedAliases.length)]
-            : ANONYMOUS_ALIASES[Math.floor(Math.random() * ANONYMOUS_ALIASES.length)];
+    const syncLoungePresence = async () => {
+      const nowIso = new Date().toISOString();
+      const partRef = doc(
+        db,
+        'loungeSessions',
+        loungeSession.sessionId,
+        'participants',
+        currentStudent.uid
+      );
 
-        await setDoc(partRef, {
-          participantUid: currentStudent.uid,
-          workspaceOwnerUid,
-          sessionId: loungeSession.sessionId,
-          anonymousAlias: assignedAlias,
-          presenceStatus: targetState,
-          aliasChangeCount: 0,
-          joinedAt: nowIso,
-          lastHeartbeatAt: nowIso,
-          aliasChangedAt: nowIso,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        await updateDoc(partRef, {
-          presenceStatus: targetState,
-          lastHeartbeatAt: nowIso,
-          updatedAt: serverTimestamp(),
-        });
+      try {
+        if (!myParticipant) {
+          const usedAliases = new Set(loungeParticipants.map((p) => p.anonymousAlias));
+          const unusedAliases = ANONYMOUS_ALIASES.filter((a) => !usedAliases.has(a));
+          const assignedAlias =
+            unusedAliases.length > 0
+              ? unusedAliases[Math.floor(Math.random() * unusedAliases.length)]
+              : ANONYMOUS_ALIASES[Math.floor(Math.random() * ANONYMOUS_ALIASES.length)];
+
+          await setDoc(partRef, {
+            participantUid: currentStudent.uid,
+            workspaceOwnerUid,
+            sessionId: loungeSession.sessionId,
+            anonymousAlias: assignedAlias,
+            presenceStatus: 'active',
+            aliasChangeCount: 0,
+            joinedAt: nowIso,
+            lastHeartbeatAt: nowIso,
+            aliasChangedAt: nowIso,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          await updateDoc(partRef, {
+            presenceStatus: 'active',
+            lastHeartbeatAt: nowIso,
+            updatedAt: serverTimestamp(),
+          });
+        }
+      } catch (e) {
+        console.error('Lounge presence sync error:', e);
       }
+    };
 
-      // Sync aggregate counts on loungeSession
-      const newWaiting = loungeParticipants.filter((p) =>
-        p.participantUid === currentStudent.uid
-          ? targetState === 'waiting'
-          : p.presenceStatus === 'waiting'
-      ).length + (!myParticipant && targetState === 'waiting' ? 1 : 0);
+    syncLoungePresence();
 
-      const newActive = loungeParticipants.filter((p) =>
-        p.participantUid === currentStudent.uid
-          ? targetState === 'active'
-          : p.presenceStatus === 'active'
-      ).length + (!myParticipant && targetState === 'active' ? 1 : 0);
+    // Heartbeat every 20 seconds
+    const interval = setInterval(() => {
+      if (isMounted) syncLoungePresence();
+    }, 20000);
 
-      await updateDoc(doc(db, 'loungeSessions', loungeSession.sessionId), {
-        waitingCount: newWaiting,
-        participantCount: newActive,
-        updatedAt: serverTimestamp(),
-      });
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [loungeSession?.sessionId, currentStudent.uid]);
 
-      if (targetState === 'waiting') {
-        onNotify('라운지 대기실에 입장했어요!', 'success');
-      } else if (targetState === 'active') {
-        onNotify(`[${currentAlias}] 별명으로 익명 라운지에 입장했어요!`, 'success');
-      } else {
-        onNotify('라운지에서 퇴장했어요.', 'info');
-      }
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, 'loungeParticipants');
-    }
-  };
+  // Real-time logged-in viewers currently watching/in the lounge (active within last 3 mins)
+  const liveLoungeViewers = useMemo(() => {
+    const now = Date.now();
+    return loungeParticipants.filter((p) => {
+      if (p.presenceStatus === 'left') return false;
+      if (!p.lastHeartbeatAt) return false;
+      const diffMs = now - new Date(p.lastHeartbeatAt).getTime();
+      return diffMs <= 3 * 60 * 1000;
+    });
+  }, [loungeParticipants]);
 
   const handleChangeAlias = async (newAlias: string) => {
     if (!loungeSession || !myParticipant) {
-      onNotify('먼저 대기실이나 라운지에 입장해 주세요.', 'info');
+      onNotify('익명 프로필 정보 설정 중입니다. 잠시 후 다시 시도해 주세요.', 'info');
       return;
     }
     if (myParticipant.aliasChangeCount >= 5) {
@@ -2141,8 +2297,8 @@ const StudentLoungeView: React.FC<StudentContextProps> = ({
     }
     const elapsedSec =
       (Date.now() - new Date(myParticipant.aliasChangedAt).getTime()) / 1000;
-    if (elapsedSec < 5) {
-      onNotify('별명은 5초 간격으로만 변경할 수 있어요.', 'info');
+    if (elapsedSec < 3) {
+      onNotify('별명은 3초 간격으로 변경할 수 있어요.', 'info');
       return;
     }
 
@@ -2172,16 +2328,12 @@ const StudentLoungeView: React.FC<StudentContextProps> = ({
     e.preventDefault();
     if (!loungeSession) return;
     if (loungeSession.status !== 'active') {
-      onNotify('현재는 라운지 대화 가능 시간이 아닙니다.', 'error');
-      return;
-    }
-    if (myParticipant?.presenceStatus !== 'active') {
-      onNotify('먼저 [라운지 입장하기] 버튼을 눌러 입장해 주세요.', 'info');
+      onNotify('현재는 선생님의 라운지 대화 가능 시간이 아닙니다.', 'error');
       return;
     }
 
     const now = Date.now();
-    if (now - lastSentAt < 2000) {
+    if (now - lastSentAt < 1500) {
       onNotify('메시지를 너무 빠르게 보낼 수 없어요. 천천히 대화해 주세요.', 'info');
       return;
     }
@@ -2249,22 +2401,23 @@ const StudentLoungeView: React.FC<StudentContextProps> = ({
 
   const statusLabels: Record<LoungeSession['status'], string> = {
     scheduled: '운영 예정',
-    waiting: '대기실 운영 중',
-    active: '라운지 진행 중',
-    ended: '종료됨',
+    waiting: '라운지 열림',
+    active: '자유 대화 진행 중',
+    ended: '라운지 종료/점검 중',
   };
 
   return (
     <div className="space-y-6">
-      {/* Header & Live Counts */}
+      {/* Header & Real-Time Viewer Counts */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-[#DDD5F8] rounded-[28px] p-6">
         <div>
           <div className="flex items-center gap-2 text-xs font-bold text-[#3730A3] mb-1">
-            <span>상태: {statusLabels[loungeSession.status]}</span>
+            <span className="px-2.5 py-0.5 rounded-full bg-[#141413] text-white text-[11px] font-extrabold">
+              {statusLabels[loungeSession.status]}
+            </span>
             <span aria-hidden="true">·</span>
             <span className="tabular-nums">
-              운영 일정: {loungeSession.scheduledDate} ({loungeSession.startsAt} ~{' '}
-              {loungeSession.endsAt})
+              운영 일정: {loungeSession.scheduledDate} ({loungeSession.startsAt} ~ {loungeSession.endsAt})
             </span>
           </div>
           <h1 className="text-xl sm:text-2xl font-extrabold text-[#141413]">
@@ -2273,81 +2426,76 @@ const StudentLoungeView: React.FC<StudentContextProps> = ({
           <p className="text-xs text-[#3D3A35] mt-1">{loungeSession.noticeRules}</p>
         </div>
 
-        <div className="flex items-center gap-3 shrink-0">
-          <div className="bg-white rounded-2xl px-4 py-2.5 text-center">
-            <span className="block text-[11px] text-[#6B665E]">대기 인원</span>
-            <strong className="text-base font-extrabold text-[#141413] tabular-nums">
-              {waitingList.length}명
-            </strong>
-          </div>
-          <div className="bg-white rounded-2xl px-4 py-2.5 text-center">
-            <span className="block text-[11px] text-[#6B665E]">참여 인원</span>
-            <strong className="text-base font-extrabold text-emerald-700 tabular-nums">
-              {activeList.length}명
+        {/* Real-time Logged-in Viewers Count */}
+        <div className="bg-white rounded-2xl px-5 py-3 border border-[#C9BFF3] flex items-center gap-3 shadow-xs shrink-0">
+          <div className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+          <div>
+            <span className="block text-[11px] font-bold text-[#6B665E]">
+              👀 현재 접속 및 열람 인원
+            </span>
+            <strong className="text-lg font-extrabold text-[#141413] tabular-nums">
+              {liveLoungeViewers.length}명 함께 보는 중
             </strong>
           </div>
         </div>
       </div>
 
-      {/* Alias Control & Room Entry Bar */}
-      <div className="bg-[#F3EFEA] rounded-[24px] p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex flex-wrap items-center gap-2.5">
-          <span className="text-xs font-bold text-[#141413]">
-            나의 익명 별명: <strong className="text-indigo-700">{currentAlias}</strong>
-          </span>
-          <select
-            value={currentAlias}
-            onChange={(e) => handleChangeAlias(e.target.value)}
-            className="rounded-xl bg-white border border-[#D6D1C7] px-3 py-1.5 text-xs font-bold text-[#141413]"
-          >
-            {ANONYMOUS_ALIASES.map((al) => (
-              <option key={al} value={al}>
-                {al}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={() => {
-              const others = ANONYMOUS_ALIASES.filter((a) => a !== currentAlias);
-              const rand = others[Math.floor(Math.random() * others.length)];
-              handleChangeAlias(rand);
-            }}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-white text-xs font-bold text-[#141413] hover:bg-[#E7E2D8] cursor-pointer"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>무작위 별명 생성</span>
-          </button>
-          <span className="text-[11px] text-[#6B665E] tabular-nums">
-            (변경 횟수: {myParticipant?.aliasChangeCount ?? 0}/5회)
-          </span>
+      {/* Alias Control & Online Viewers Bar */}
+      <div className="bg-[#F3EFEA] rounded-[24px] p-5 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className="text-xs font-bold text-[#141413]">
+              나의 익명 별명: <strong className="text-indigo-700">{currentAlias}</strong>
+            </span>
+            <select
+              value={currentAlias}
+              onChange={(e) => handleChangeAlias(e.target.value)}
+              className="rounded-xl bg-white border border-[#D6D1C7] px-3 py-1.5 text-xs font-bold text-[#141413]"
+            >
+              {ANONYMOUS_ALIASES.map((al) => (
+                <option key={al} value={al}>
+                  {al}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => {
+                const others = ANONYMOUS_ALIASES.filter((a) => a !== currentAlias);
+                const rand = others[Math.floor(Math.random() * others.length)];
+                handleChangeAlias(rand);
+              }}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-white text-xs font-bold text-[#141413] hover:bg-[#E7E2D8] cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>무작위 별명 변경</span>
+            </button>
+            <span className="text-[11px] text-[#6B665E] tabular-nums">
+              (변경 횟수: {myParticipant?.aliasChangeCount ?? 0}/5회)
+            </span>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {myParticipant?.presenceStatus !== 'waiting' && (
-            <button
-              onClick={() => handleJoinPresence('waiting')}
-              className="px-3.5 py-2 rounded-xl bg-white text-xs font-bold text-[#141413] cursor-pointer"
-            >
-              대기실 입장
-            </button>
-          )}
-          {loungeSession.status === 'active' &&
-            myParticipant?.presenceStatus !== 'active' && (
-              <button
-                onClick={() => handleJoinPresence('active')}
-                className="px-4 py-2 rounded-xl bg-[#141413] text-white text-xs font-bold cursor-pointer"
+        {/* Live Anonymous Viewers List */}
+        <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-[#E2DDD3]">
+          <span className="text-xs font-extrabold text-[#5C574F] mr-1">
+            💬 실시간 라운지 열람 중인 별명 ({liveLoungeViewers.length}명):
+          </span>
+          {liveLoungeViewers.length === 0 ? (
+            <span className="text-xs text-[#8C827A]">현재 접속 중인 다른 친구가 없습니다.</span>
+          ) : (
+            liveLoungeViewers.map((p) => (
+              <span
+                key={p.participantUid}
+                className={`px-2.5 py-1 rounded-xl text-xs font-bold border transition-all ${
+                  p.participantUid === currentStudent.uid
+                    ? 'bg-[#141413] text-white border-[#141413]'
+                    : 'bg-white text-[#141413] border-[#E2DDD3]'
+                }`}
               >
-                라운지 입장하기
-              </button>
-            )}
-          {myParticipant && myParticipant.presenceStatus !== 'left' && (
-            <button
-              onClick={() => handleJoinPresence('left')}
-              className="px-3.5 py-2 rounded-xl bg-rose-100 text-rose-700 text-xs font-bold cursor-pointer"
-            >
-              라운지 나가기
-            </button>
+                {p.anonymousAlias} {p.participantUid === currentStudent.uid ? '(나)' : ''}
+              </span>
+            ))
           )}
         </div>
       </div>

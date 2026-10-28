@@ -21,6 +21,12 @@ import {
   CheckSquare,
   Square,
   AlertTriangle,
+  ChevronDown,
+  ChevronUp,
+  Zap,
+  Filter,
+  Check,
+  X,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -468,6 +474,39 @@ const TeacherDashboardOverview: React.FC<TeacherContextProps> = ({
         onClose={() => setProfileModalOpen(false)}
         onNotify={onNotify}
       />
+
+      {/* Real-time Pending Mission Push Notification Banner */}
+      {pendingSubmissions.length > 0 && (
+        <div
+          onClick={() => onNavigate('missions')}
+          className="bg-[#FEF3C7] border-2 border-amber-400 rounded-[24px] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md cursor-pointer hover:bg-[#FDE68A] transition-all"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center font-extrabold text-xl shadow-xs shrink-0 animate-bounce">
+              🔔
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <p className="text-xs font-extrabold text-amber-950">
+                  [실시간 승인 알림] 학생이 제출한 미션 승인 대기건이 총 {pendingSubmissions.length}건 수신되었습니다!
+                </p>
+                <span className="px-2 py-0.5 rounded-full bg-amber-600 text-white text-[10px] font-extrabold animate-pulse">
+                  NEW
+                </span>
+              </div>
+              <p className="text-[11px] text-amber-800 mt-0.5">
+                클릭하여 미션 관리·승인 탭으로 이동해서 바로 검토 및 승인/점수 지급을 처리하세요.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="px-4 py-2 rounded-xl bg-amber-900 text-white text-xs font-extrabold whitespace-nowrap shadow-xs hover:bg-amber-950 shrink-0"
+          >
+            미션 관리 및 즉시 승인 →
+          </button>
+        </div>
+      )}
 
       {/* 8 Top KPI Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
@@ -1812,12 +1851,37 @@ const TeacherActivitiesView: React.FC<TeacherContextProps> = ({
 /* ============================================================================
  * 4. TEACHER MISSION MANAGEMENT & APPROVAL VIEW
  * ========================================================================== */
+/* ============================================================================
+ * 4. TEACHER MISSION MANAGEMENT & APPROVAL VIEW
+ * ========================================================================== */
 const TeacherMissionsView: React.FC<TeacherContextProps> = ({
   workspaceOwnerUid,
   teacherProfile,
+  allUsers,
   missions,
+  submissions,
+  badges,
+  badgeAwards,
+  letters,
   onNotify,
 }) => {
+  // Submission Filter & Search State
+  const [subFilterTab, setSubFilterTab] = useState<'pending' | 'auto' | 'approved' | 'rejected' | 'all'>('pending');
+  const [subCategoryFilter, setSubCategoryFilter] = useState<string>('all');
+  const [subSearchQuery, setSubSearchQuery] = useState('');
+  const [expandedSubIds, setExpandedSubIds] = useState<Set<string>>(new Set());
+  const [approvingAll, setApprovingAll] = useState(false);
+
+  // Rejection Comment Modal / Prompt State
+  const [rejectModalSub, setRejectModalSub] = useState<MissionSubmission | null>(null);
+  const [rejectReasonInput, setRejectReasonInput] = useState('');
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+
+  // Deletion Confirmation State
+  const [deleteModalSub, setDeleteModalSub] = useState<MissionSubmission | null>(null);
+  const [deleteReasonInput, setDeleteReasonInput] = useState('');
+
+  // Add Custom Mission State
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [howTo, setHowTo] = useState('');
@@ -1825,10 +1889,269 @@ const TeacherMissionsView: React.FC<TeacherContextProps> = ({
   const [category, setCategory] = useState<MissionCategory>('kindness');
   const [requiresApproval, setRequiresApproval] = useState(false);
 
+  const students = useMemo(
+    () => allUsers.filter((u) => u.role === 'student'),
+    [allUsers]
+  );
+
   const sortedMissions = useMemo(
     () => [...missions].sort((a, b) => a.orderIndex - b.orderIndex),
     [missions]
   );
+
+  // Category list and counts for Mission Type Tabs
+  const CATEGORIES = useMemo(
+    () => [
+      { id: 'all', label: '전체 유형', icon: '🏷️' },
+      { id: 'kindness', label: '친절', icon: '💖' },
+      { id: 'care', label: '배려', icon: '🌿' },
+      { id: 'observation', label: '관찰', icon: '🔍' },
+      { id: 'gratitude', label: '감사', icon: '🙏' },
+      { id: 'cooperation', label: '협동', icon: '🤝' },
+    ],
+    []
+  );
+
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: submissions.length };
+    submissions.forEach((sub) => {
+      const mis = missions.find((m) => m.missionId === sub.missionId);
+      const cat = mis?.category || 'other';
+      counts[cat] = (counts[cat] || 0) + 1;
+    });
+    return counts;
+  }, [submissions, missions]);
+
+  // Counts for Submission Status Tabs
+  const pendingCount = useMemo(
+    () => submissions.filter((s) => s.status === 'pending').length,
+    [submissions]
+  );
+  const autoApprovedCount = useMemo(
+    () => submissions.filter((s) => s.status === 'approved' && s.reviewedBy === 'system_auto').length,
+    [submissions]
+  );
+  const teacherApprovedCount = useMemo(
+    () => submissions.filter((s) => s.status === 'approved' && s.reviewedBy !== 'system_auto').length,
+    [submissions]
+  );
+  const rejectedOrDeletedCount = useMemo(
+    () => submissions.filter((s) => s.status === 'rejected' || s.status === 'deleted').length,
+    [submissions]
+  );
+
+  // Filtered Submissions List (by status, category, and search query)
+  const filteredSubmissions = useMemo(() => {
+    return submissions
+      .filter((sub) => {
+        if (subFilterTab === 'pending') return sub.status === 'pending';
+        if (subFilterTab === 'auto') return sub.status === 'approved' && sub.reviewedBy === 'system_auto';
+        if (subFilterTab === 'approved') return sub.status === 'approved' && sub.reviewedBy !== 'system_auto';
+        if (subFilterTab === 'rejected') return sub.status === 'rejected' || sub.status === 'deleted';
+        return true;
+      })
+      .filter((sub) => {
+        if (subCategoryFilter === 'all') return true;
+        const mis = missions.find((m) => m.missionId === sub.missionId);
+        return mis?.category === subCategoryFilter;
+      })
+      .filter((sub) => {
+        if (!subSearchQuery.trim()) return true;
+        const q = subSearchQuery.trim().toLowerCase();
+        const stu = students.find((s) => s.uid === sub.studentUid);
+        const mis = missions.find((m) => m.missionId === sub.missionId);
+        return (
+          (stu?.displayName && stu.displayName.toLowerCase().includes(q)) ||
+          (stu?.studentLoginId && stu.studentLoginId.toLowerCase().includes(q)) ||
+          (mis?.title && mis.title.toLowerCase().includes(q)) ||
+          sub.actionDescription.toLowerCase().includes(q) ||
+          sub.reflection.toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        // Pending submissions always on top
+        if (a.status === 'pending' && b.status !== 'pending') return -1;
+        if (a.status !== 'pending' && b.status === 'pending') return 1;
+        return b.activityDate.localeCompare(a.activityDate);
+      });
+  }, [submissions, subFilterTab, subCategoryFilter, subSearchQuery, students, missions]);
+
+  // Toggle Single Fold / Unfold
+  const toggleSubExpand = (subId: string) => {
+    setExpandedSubIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(subId)) next.delete(subId);
+      else next.add(subId);
+      return next;
+    });
+  };
+
+  // Toggle All Expand / Collapse
+  const handleToggleExpandAll = () => {
+    if (expandedSubIds.size === filteredSubmissions.length && filteredSubmissions.length > 0) {
+      setExpandedSubIds(new Set());
+    } else {
+      setExpandedSubIds(new Set(filteredSubmissions.map((s) => s.submissionId)));
+    }
+  };
+
+  // Batch Approve All Pending Submissions Action
+  const handleApproveAllPending = async () => {
+    const pendingSubs = submissions.filter((s) => s.status === 'pending');
+    if (pendingSubs.length === 0 || approvingAll) {
+      onNotify('현재 승인 대기 중인 미션이 없습니다.', 'info');
+      return;
+    }
+
+    if (!window.confirm(`현재 승인 대기 중인 ${pendingSubs.length}건의 미션을 모두 일괄 승인하시겠습니까?`)) {
+      return;
+    }
+
+    setApprovingAll(true);
+    let successCount = 0;
+    try {
+      let currentSubmissions = [...submissions];
+      for (const sub of pendingSubs) {
+        const mis = missions.find((m) => m.missionId === sub.missionId);
+        const pts = mis?.points || 10;
+        const title = mis?.title || '미션';
+
+        await reviewMissionSubmission({
+          workspaceOwnerUid,
+          teacherUid: teacherProfile.uid,
+          teacherName: teacherProfile.displayName,
+          submission: sub,
+          missionTitle: title,
+          missionPoints: pts,
+          decision: 'approved',
+          reviewComment: '선생님이 대기 미션을 일괄 승인했습니다! 참 잘했어요 🌸',
+        });
+
+        currentSubmissions = currentSubmissions.map((s) =>
+          s.submissionId === sub.submissionId ? { ...s, status: 'approved' as const } : s
+        );
+
+        await evaluateAndAwardBadges({
+          workspaceOwnerUid,
+          studentUid: sub.studentUid,
+          classId: sub.classId,
+          missions,
+          submissions: currentSubmissions,
+          sentLettersCount: letters.filter((l) => l.senderUid === sub.studentUid).length,
+          badges,
+          existingAwards: badgeAwards,
+        });
+
+        successCount++;
+      }
+
+      onNotify(`승인 대기 중인 미션 ${successCount}건이 모두 일괄 승인되었습니다! 🎉`, 'success');
+    } catch (err) {
+      onNotify(`일괄 승인 중 오류 발생: ${err instanceof Error ? err.message : String(err)}`, 'error');
+    } finally {
+      setApprovingAll(false);
+    }
+  };
+
+  // Approve Mission Action
+  const handleApproveSubmission = async (sub: MissionSubmission) => {
+    const mis = missions.find((m) => m.missionId === sub.missionId);
+    if (!mis || reviewingId) return;
+    setReviewingId(sub.submissionId);
+    try {
+      await reviewMissionSubmission({
+        workspaceOwnerUid,
+        teacherUid: teacherProfile.uid,
+        teacherName: teacherProfile.displayName,
+        submission: sub,
+        missionTitle: mis.title,
+        missionPoints: mis.points,
+        decision: 'approved',
+        reviewComment: '선생님이 실천 기록을 확인하고 승인했어요! 칭찬합니다 🌸',
+      });
+
+      const updatedSubs = submissions.map((s) =>
+        s.submissionId === sub.submissionId ? { ...s, status: 'approved' as const } : s
+      );
+
+      await evaluateAndAwardBadges({
+        workspaceOwnerUid,
+        studentUid: sub.studentUid,
+        classId: sub.classId,
+        missions,
+        submissions: updatedSubs,
+        sentLettersCount: letters.filter((l) => l.senderUid === sub.studentUid).length,
+        badges,
+        existingAwards: badgeAwards,
+      });
+
+      onNotify(`미션 승인 완료! 학생에게 +${mis.points}점이 즉시 지급되었습니다.`, 'success');
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : '승인 실패', 'error');
+    } finally {
+      setReviewingId(null);
+    }
+  };
+
+  // Reject Mission Action
+  const handleRejectSubmissionSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rejectModalSub) return;
+    const mis = missions.find((m) => m.missionId === rejectModalSub.missionId);
+    const comment = rejectReasonInput.trim() || '실천 내용을 조금 더 구체적으로 보완하여 다시 도전해 볼까요?';
+
+    setReviewingId(rejectModalSub.submissionId);
+    try {
+      await reviewMissionSubmission({
+        workspaceOwnerUid,
+        teacherUid: teacherProfile.uid,
+        teacherName: teacherProfile.displayName,
+        submission: rejectModalSub,
+        missionTitle: mis?.title || '미션',
+        missionPoints: mis?.points || 0,
+        decision: 'rejected',
+        reviewComment: comment,
+      });
+
+      onNotify('미션이 반려 처리되었습니다.', 'info');
+      setRejectModalSub(null);
+      setRejectReasonInput('');
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : '반려 처리 실패', 'error');
+    } finally {
+      setReviewingId(null);
+    }
+  };
+
+  // Delete Mission Submission Action
+  const handleDeleteSubmissionSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!deleteModalSub) return;
+    const mis = missions.find((m) => m.missionId === deleteModalSub.missionId);
+    const comment = deleteReasonInput.trim() || '교사 요청에 의한 부적절/중복 활동 기록 삭제';
+
+    setReviewingId(deleteModalSub.submissionId);
+    try {
+      await reviewMissionSubmission({
+        workspaceOwnerUid,
+        teacherUid: teacherProfile.uid,
+        teacherName: teacherProfile.displayName,
+        submission: deleteModalSub,
+        missionTitle: mis?.title || '미션',
+        missionPoints: mis?.points || 0,
+        decision: 'deleted',
+        reviewComment: comment,
+      });
+
+      onNotify('활동 기록이 완전히 삭제 처리되고 지급되었던 점수가 차감되었습니다.', 'info');
+      setDeleteModalSub(null);
+      setDeleteReasonInput('');
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : '삭제 처리 실패', 'error');
+    } finally {
+      setReviewingId(null);
+    }
+  };
 
   const handleAddMission = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1892,109 +2215,663 @@ const TeacherMissionsView: React.FC<TeacherContextProps> = ({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8 w-full">
+      {/* View Header */}
       <div>
         <p className="text-xs font-semibold text-[#6B665E] mb-1">
-          미션 추가 · 점수 설정 · 활성화/비활성화 관리
+          미션 제출 검토 및 승인 · 자동 승인 내역 확인 · 신규 미션 설정
         </p>
         <h1 className="text-2xl sm:text-3xl font-extrabold text-[#141413]">
-          마니또 미션 관리 ({sortedMissions.length}개)
+          미션 제출 승인 및 미션 목록 관리
         </h1>
       </div>
 
-      {/* Add Mission Form */}
-      <form
-        onSubmit={handleAddMission}
-        className="bg-[#F3EFEA] rounded-[28px] p-6 space-y-4"
-      >
-        <h2 className="text-base font-extrabold text-[#141413]">+ 새 마니또 미션 추가하기</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="미션 제목 (예: 급식 시간에 감사 인사하기)"
-            required
-            className="rounded-xl bg-white px-3.5 py-2 text-xs"
-          />
-          <select
-            value={category}
-            onChange={(e) => setCategory(e.target.value as MissionCategory)}
-            className="rounded-xl bg-white px-3.5 py-2 text-xs font-bold"
-          >
-            <option value="kindness">친절·인사</option>
-            <option value="observation">관찰·장점 발견</option>
-            <option value="care">배려·도움</option>
-            <option value="gratitude">감사·편지</option>
-            <option value="cooperation">학급 협력</option>
-          </select>
-          <div className="flex items-center gap-2">
-            <input
-              type="number"
-              min={5}
-              max={50}
-              step={5}
-              value={points}
-              onChange={(e) => setPoints(Number(e.target.value))}
-              className="w-24 rounded-xl bg-white px-3 py-2 text-xs font-bold tabular-nums"
-            />
-            <span className="text-xs font-bold">점</span>
-            <label className="flex items-center gap-1.5 text-xs font-semibold ml-2">
-              <input
-                type="checkbox"
-                checked={requiresApproval}
-                onChange={(e) => setRequiresApproval(e.target.checked)}
-              />
-              <span>교사 확인 필요</span>
-            </label>
-          </div>
-        </div>
-        <div className="flex flex-col sm:flex-row gap-3">
-          <input
-            type="text"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="미션 상세 설명 및 실천 방법..."
-            required
-            className="flex-1 rounded-xl bg-white px-3.5 py-2 text-xs"
-          />
-          <button
-            type="submit"
-            className="px-5 py-2 rounded-xl bg-[#141413] text-white text-xs font-bold cursor-pointer whitespace-nowrap shrink-0"
-          >
-            미션 등록
-          </button>
-        </div>
-      </form>
-
-      {/* Missions List */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-        {sortedMissions.map((m) => (
-          <div
-            key={m.missionId}
-            className={`rounded-2xl p-4 flex items-center justify-between gap-3 ${
-              m.active ? 'bg-[#F3EFEA]' : 'bg-[#EFECE6] opacity-60'
-            }`}
-          >
-            <div>
-              <p className="text-xs font-extrabold text-[#141413]">
-                {String(m.orderIndex).padStart(2, '0')}. {m.title} (+{m.points}점)
-              </p>
-              <p className="text-[11px] text-[#5C574F] mt-0.5">
-                {m.requiresTeacherApproval ? '선생님 확인 후 승인' : '실천 기록 시 자동 승인'} · 최대{' '}
-                {m.maxCompletions}회
-              </p>
+      {/* =========================================================================
+       * SECTION 1: STUDENT MISSION SUBMISSIONS & APPROVAL DASHBOARD (STATUS-GROUPED COLLAPSIBLE)
+       * ======================================================================= */}
+      <div className="bg-[#F3EFEA] rounded-[28px] p-5 sm:p-7 space-y-6 border border-[#E2DDD3]">
+        {/* Section Header & Search & Batch Approve */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#E2DDD3] pb-4">
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-lg font-extrabold text-[#141413]">
+                📌 학생 미션 실천 및 승인 관리
+              </h2>
+              {pendingCount > 0 && (
+                <span className="px-2.5 py-0.5 rounded-full bg-amber-500 text-white text-xs font-extrabold animate-pulse">
+                  승인 대기 {pendingCount}건
+                </span>
+              )}
             </div>
+            <p className="text-xs text-[#6B665E] mt-0.5">
+              승인 상태 및 미션 유형별로 제출 내역을 필터링하고, 대기 중인 항목을 개별 또는 일괄 승인할 수 있습니다.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            {/* Batch Approve All Button */}
+            {pendingCount > 0 && (
+              <button
+                type="button"
+                disabled={approvingAll}
+                onClick={handleApproveAllPending}
+                className="px-3.5 py-1.5 rounded-xl bg-amber-500 text-white text-xs font-extrabold hover:bg-amber-600 transition-colors cursor-pointer shadow-xs whitespace-nowrap flex items-center gap-1.5"
+                title="승인 대기 중인 모든 미션을 한 번에 승인합니다."
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>{approvingAll ? '일괄 승인 중...' : `⚡ 대기 미션 전체 승인 (${pendingCount}건)`}</span>
+              </button>
+            )}
+
+            {/* Search Input */}
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#8C827A]" />
+              <input
+                type="text"
+                value={subSearchQuery}
+                onChange={(e) => setSubSearchQuery(e.target.value)}
+                placeholder="학생 이름 / 미션 검색..."
+                className="pl-8 pr-3 py-1.5 rounded-xl bg-white text-xs font-bold text-[#141413] focus:outline-none focus:ring-2 focus:ring-[#141413] w-36 sm:w-48"
+              />
+            </div>
+
+            {/* Expand / Collapse All Toggle */}
             <button
-              onClick={() => handleToggleMissionActive(m)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer shrink-0 ${
-                m.active ? 'bg-white text-[#141413]' : 'bg-[#141413] text-white'
-              }`}
+              type="button"
+              onClick={handleToggleExpandAll}
+              className="px-3 py-1.5 rounded-xl bg-white text-[#141413] text-xs font-extrabold hover:bg-[#141413] hover:text-white transition-colors cursor-pointer shadow-xs whitespace-nowrap"
             >
-              {m.active ? '활성 중' : '비활성'}
+              {expandedSubIds.size === filteredSubmissions.length && filteredSubmissions.length > 0
+                ? '항목 전체 접기 ▴'
+                : '항목 전체 펼치기 ▾'}
             </button>
           </div>
-        ))}
+        </div>
+
+        {/* Filter Tab Rows: 1) Status Filter, 2) Mission Category Filter */}
+        <div className="space-y-2.5">
+          {/* Row 1: Status Filter Quick Buttons */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs scrollbar-none">
+            <span className="text-[11px] font-extrabold text-[#6B665E] shrink-0 mr-1 flex items-center gap-1">
+              <Filter className="w-3 h-3 text-[#8C827A]" />
+              승인 상태:
+            </span>
+            <button
+              type="button"
+              onClick={() => setSubFilterTab('pending')}
+              className={`px-3 py-1.5 rounded-xl font-extrabold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                subFilterTab === 'pending'
+                  ? 'bg-[#141413] text-white shadow-xs'
+                  : 'bg-white/80 text-[#5C574F] hover:bg-white'
+              }`}
+            >
+              <span>⏳ 승인 대기 목록</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] tabular-nums ${
+                subFilterTab === 'pending' ? 'bg-amber-400 text-[#141413]' : 'bg-amber-100 text-amber-800'
+              }`}>
+                {pendingCount}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSubFilterTab('auto')}
+              className={`px-3 py-1.5 rounded-xl font-extrabold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                subFilterTab === 'auto'
+                  ? 'bg-[#141413] text-white shadow-xs'
+                  : 'bg-white/80 text-[#5C574F] hover:bg-white'
+              }`}
+            >
+              <span>⚡ 자동 승인 내역</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] tabular-nums ${
+                subFilterTab === 'auto' ? 'bg-[#C6F0DF] text-[#065F46]' : 'bg-[#E2F2EA] text-[#065F46]'
+              }`}>
+                {autoApprovedCount}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSubFilterTab('approved')}
+              className={`px-3 py-1.5 rounded-xl font-extrabold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                subFilterTab === 'approved'
+                  ? 'bg-[#141413] text-white shadow-xs'
+                  : 'bg-white/80 text-[#5C574F] hover:bg-white'
+              }`}
+            >
+              <span>✅ 교사 승인 완료</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-sky-100 text-sky-800 tabular-nums">
+                {teacherApprovedCount}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSubFilterTab('rejected')}
+              className={`px-3 py-1.5 rounded-xl font-extrabold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                subFilterTab === 'rejected'
+                  ? 'bg-[#141413] text-white shadow-xs'
+                  : 'bg-white/80 text-[#5C574F] hover:bg-white'
+              }`}
+            >
+              <span>❌ 반려 / 삭제됨</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-rose-100 text-rose-800 tabular-nums">
+                {rejectedOrDeletedCount}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSubFilterTab('all')}
+              className={`px-3 py-1.5 rounded-xl font-extrabold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                subFilterTab === 'all'
+                  ? 'bg-[#141413] text-white shadow-xs'
+                  : 'bg-white/80 text-[#5C574F] hover:bg-white'
+              }`}
+            >
+              <span>📋 전체 보기</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-gray-200 text-gray-800 tabular-nums">
+                {submissions.length}
+              </span>
+            </button>
+          </div>
+
+          {/* Row 2: Mission Category Type Filter Tabs */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs scrollbar-none pt-2 border-t border-[#E2DDD3]/60">
+            <span className="text-[11px] font-extrabold text-[#6B665E] shrink-0 mr-1 flex items-center gap-1">
+              <Zap className="w-3 h-3 text-[#8C827A]" />
+              미션 유형별:
+            </span>
+            {CATEGORIES.map((cat) => {
+              const count = categoryCounts[cat.id] || 0;
+              const isActive = subCategoryFilter === cat.id;
+              return (
+                <button
+                  key={cat.id}
+                  type="button"
+                  onClick={() => setSubCategoryFilter(cat.id)}
+                  className={`px-3 py-1 rounded-xl font-extrabold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1 text-xs ${
+                    isActive
+                      ? 'bg-[#141413] text-white shadow-xs'
+                      : 'bg-white/80 text-[#5C574F] hover:bg-white border border-[#E2DDD3]/80'
+                  }`}
+                >
+                  <span>{cat.icon} {cat.label}</span>
+                  <span
+                    className={`px-1.5 py-0.2 rounded-full text-[10px] tabular-nums ${
+                      isActive ? 'bg-white/20 text-white' : 'bg-[#E2DDD3] text-[#4A463F]'
+                    }`}
+                  >
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* =====================================================================
+         * STATUS-GROUPED SUBMISSION CARDS LIST
+         * =================================================================== */}
+        {filteredSubmissions.length === 0 ? (
+          <div className="bg-white rounded-2xl p-8 text-center space-y-2 border border-[#E2DDD3]">
+            <div className="text-3xl">🍃</div>
+            <p className="text-xs font-bold text-[#141413]">
+              {subFilterTab === 'pending'
+                ? '현재 선생님 확인이 필요한 승인 대기 미션이 없습니다!'
+                : subFilterTab === 'auto'
+                ? '자동 승인된 미션 기록이 없습니다.'
+                : '해당하는 미션 제출 기록이 없습니다.'}
+            </p>
+            <p className="text-[11px] text-[#6B665E]">
+              학생들이 미션을 실천하고 제출하면 이곳에 수신됩니다.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filteredSubmissions.map((sub) => {
+              const stu = students.find((s) => s.uid === sub.studentUid);
+              const mis = missions.find((m) => m.missionId === sub.missionId);
+              const isExpanded = expandedSubIds.has(sub.submissionId);
+              const isPending = sub.status === 'pending';
+              const isAutoApproved = sub.status === 'approved' && sub.reviewedBy === 'system_auto';
+              const isTeacherApproved = sub.status === 'approved' && sub.reviewedBy !== 'system_auto';
+              const todayStr = new Date().toISOString().slice(0, 10);
+              const isRecent = sub.activityDate === todayStr || isPending;
+
+              return (
+                <div
+                  key={sub.submissionId}
+                  className={`bg-white rounded-2xl border transition-all overflow-hidden ${
+                    isPending
+                      ? 'border-amber-400 ring-2 ring-amber-200 shadow-md bg-amber-50/40'
+                      : isRecent
+                      ? 'border-amber-300 ring-1 ring-amber-200/60 shadow-xs bg-amber-50/20'
+                      : isAutoApproved
+                      ? 'border-emerald-200 hover:border-emerald-300 shadow-xs'
+                      : 'border-[#E2DDD3] hover:border-[#C5BEB2] shadow-xs'
+                  }`}
+                >
+                  {/* Summary Header Bar (Always Visible) */}
+                  <div
+                    onClick={() => toggleSubExpand(sub.submissionId)}
+                    className="p-4 sm:p-4.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer select-none hover:bg-gray-50/80 transition-colors"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <AvatarIllustration avatarId={stu?.avatarId || 'rabbit'} size="sm" />
+                      <div className="min-w-0 space-y-0.5">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <strong className="text-xs font-extrabold text-[#141413]">
+                            {stu?.displayName || '학생'}
+                          </strong>
+                          <span className="text-[10px] text-[#6B665E] font-mono">
+                            ({stu?.studentLoginId || 'ID'})
+                          </span>
+                          <span className="text-[#B5AF9E]">|</span>
+                          <span className="text-xs font-bold text-[#3D3A35]">
+                            {mis?.title || '마니또 미션'}
+                          </span>
+                          <span className="px-2 py-0.5 rounded-lg bg-[#F3EFEA] text-[10px] font-extrabold text-[#141413] tabular-nums">
+                            +{mis?.points || sub.awardedPoints}점
+                          </span>
+                          {isRecent && (
+                            <span className="px-2 py-0.5 rounded-full bg-amber-500 text-white text-[10px] font-extrabold shadow-xs animate-pulse">
+                              ✨ 최근 제출됨
+                            </span>
+                          )}
+                        </div>
+
+                        <p className="text-[11px] text-[#5C574F] truncate max-w-md sm:max-w-xl">
+                          💬 {sub.actionDescription}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0 justify-between sm:justify-end">
+                      <span className="text-[11px] text-[#6B665E] font-mono tabular-nums">
+                        실천일: {sub.activityDate}
+                      </span>
+
+                      {/* Status & Explicit Tag Badges */}
+                      {isPending ? (
+                        <span className="px-2.5 py-1 rounded-xl bg-amber-100 text-amber-900 text-[11px] font-extrabold flex items-center gap-1 border border-amber-300">
+                          <span>⏳ 승인 대기</span>
+                        </span>
+                      ) : isAutoApproved ? (
+                        <span className="px-2.5 py-1 rounded-xl bg-[#E2F2EA] text-[#065F46] text-[11px] font-extrabold flex items-center gap-1 border border-emerald-300 shadow-xs">
+                          <Zap className="w-3.5 h-3.5 text-[#065F46]" />
+                          <span>자동 승인</span>
+                        </span>
+                      ) : isTeacherApproved ? (
+                        <span className="px-2.5 py-1 rounded-xl bg-sky-100 text-sky-800 text-[11px] font-extrabold flex items-center gap-1 border border-sky-200">
+                          <span>✅ 교사 승인</span>
+                        </span>
+                      ) : sub.status === 'deleted' ? (
+                        <span className="px-2.5 py-1 rounded-xl bg-gray-100 text-gray-700 text-[11px] font-bold">
+                          🗑️ 삭제됨 (점수회수)
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-1 rounded-xl bg-rose-100 text-rose-800 text-[11px] font-bold">
+                          ❌ 반려됨
+                        </span>
+                      )}
+
+                      {/* Accordion Toggle Icon Button */}
+                      <div className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-[#F3EFEA] text-[11px] font-bold text-[#141413] hover:bg-[#E2DDD3]">
+                        {isExpanded ? (
+                          <>
+                            <span>접기</span>
+                            <ChevronUp className="w-3.5 h-3.5 text-[#141413]" />
+                          </>
+                        ) : (
+                          <>
+                            <span>상세</span>
+                            <ChevronDown className="w-3.5 h-3.5 text-[#141413]" />
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Direct Action Bar for Pending Submissions */}
+                  {isPending && (
+                    <div className="bg-amber-50/90 px-4 py-2.5 border-t border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                      <span className="text-amber-900 font-bold text-[11px]">
+                        💡 교사의 확인 및 승인이 필요한 미션입니다. 내용 확인 후 즉시 처리해 주세요.
+                      </span>
+                      <div className="flex items-center gap-2 justify-end">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setRejectModalSub(sub);
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-rose-100 text-rose-800 font-extrabold text-xs hover:bg-rose-200 cursor-pointer shadow-xs"
+                        >
+                          반려 처리
+                        </button>
+                        <button
+                          type="button"
+                          disabled={reviewingId === sub.submissionId}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleApproveSubmission(sub);
+                          }}
+                          className="px-4 py-1.5 rounded-xl bg-[#141413] text-white font-extrabold text-xs hover:bg-[#2C2A27] cursor-pointer shadow-xs"
+                        >
+                          {reviewingId === sub.submissionId ? '승인 처리 중...' : `승인 및 점수 지급 (+${mis?.points || 10}점)`}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Expanded Body View (Shows '시스템 자동 처리' explicitly for auto-approved) */}
+                  {isExpanded && (
+                    <div className="p-4 sm:p-5 bg-[#FBF9F5] border-t border-[#E2DDD3] space-y-4 text-xs animate-fadeIn">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="bg-white rounded-xl p-3.5 border border-[#E8E4DC] space-y-1.5">
+                          <p className="font-extrabold text-[#141413] flex items-center gap-1 text-[11px]">
+                            <span>📝</span> 실제로 한 행동 (실천 내용)
+                          </p>
+                          <p className="text-[#3D3A35] leading-relaxed font-semibold">
+                            {sub.actionDescription}
+                          </p>
+                        </div>
+
+                        <div className="bg-white rounded-xl p-3.5 border border-[#E8E4DC] space-y-1.5">
+                          <p className="font-extrabold text-[#141413] flex items-center gap-1 text-[11px]">
+                            <span>💭</span> 실천 후 느낀 점 (마음 소감)
+                          </p>
+                          <p className="text-[#5C574F] leading-relaxed font-medium">
+                            {sub.reflection}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Evidence & Explicit System Auto / Teacher Review Info Bar */}
+                      <div className="bg-white rounded-xl p-3.5 border border-[#E8E4DC] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-[11px] text-[#5C574F]">
+                        <div className="space-y-1">
+                          <p>
+                            📌 <strong>증빙/참고 노트:</strong> {sub.evidenceNote || '제출된 증빙 메모 없음'}
+                          </p>
+                          <p>
+                            ⚙️ <strong>승인 및 처리 정보:</strong>{' '}
+                            {sub.reviewedBy === 'system_auto' ? (
+                              <span className="text-[#065F46] font-extrabold bg-[#E2F2EA] px-2 py-0.5 rounded-md inline-flex items-center gap-1">
+                                <Zap className="w-3 h-3 text-[#065F46]" />
+                                시스템 자동 처리 (미션 실천 기록 제출 시 즉시 승인 및 점수 반영됨)
+                              </span>
+                            ) : sub.reviewedBy ? (
+                              <span className="text-[#141413] font-bold">👨‍🏫 교사 승인 완료 ({sub.reviewedBy})</span>
+                            ) : (
+                              <span className="text-amber-800 font-bold">⏳ 교사 확인 및 승인 대기 중</span>
+                            )}
+                          </p>
+                        </div>
+
+                        {sub.reviewComment && (
+                          <div className="bg-[#F3EFEA] rounded-lg p-2.5 border border-[#E2DDD3] shrink-0 max-w-sm">
+                            <p className="font-bold text-[#141413]">💬 선생님 코멘트/피드백:</p>
+                            <p className="text-[#3D3A35] mt-0.5">{sub.reviewComment}</p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Expanded Action Buttons */}
+                      <div className="flex items-center justify-between pt-2 border-t border-[#E8E4DC]">
+                        <button
+                          type="button"
+                          onClick={() => setDeleteModalSub(sub)}
+                          className="px-3 py-1.5 rounded-xl bg-rose-50 text-rose-700 font-bold hover:bg-rose-100 cursor-pointer text-xs"
+                        >
+                          🗑️ 활동 기록 숨김/삭제 (지급 점수 회수)
+                        </button>
+
+                        <div className="flex items-center gap-2">
+                          {isPending ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => setRejectModalSub(sub)}
+                                className="px-3.5 py-1.5 rounded-xl bg-rose-100 text-rose-800 font-extrabold hover:bg-rose-200 cursor-pointer text-xs"
+                              >
+                                반려 처리하기
+                              </button>
+                              <button
+                                type="button"
+                                disabled={reviewingId === sub.submissionId}
+                                onClick={() => handleApproveSubmission(sub)}
+                                className="px-4 py-2 rounded-xl bg-[#141413] text-white font-extrabold hover:bg-[#2C2A27] cursor-pointer text-xs shadow-xs"
+                              >
+                                {reviewingId === sub.submissionId ? '승인 처리 중...' : `확인 완료, 미션 승인 및 +${mis?.points || 10}점 지급`}
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => toggleSubExpand(sub.submissionId)}
+                              className="px-3 py-1.5 rounded-xl bg-[#EFECE6] text-[#4A463F] font-bold hover:bg-[#E2DDD3] cursor-pointer text-xs"
+                            >
+                              상세 접기 ▴
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* =========================================================================
+       * MODAL A: Rejection Reason Modal
+       * ======================================================================= */}
+      {rejectModalSub && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <form
+            onSubmit={handleRejectSubmissionSubmit}
+            className="bg-[#FBF9F5] rounded-[32px] max-w-md w-full p-6 space-y-4 shadow-xl border border-white"
+          >
+            <h3 className="text-lg font-extrabold text-[#141413]">
+              미션 제출 반려 처리
+            </h3>
+            <p className="text-xs text-[#5C574F]">
+              학생에게 전달될 반려 사유 또는 보완 코멘트를 입력해 주세요.
+            </p>
+            <div>
+              <label className="block text-xs font-bold text-[#141413] mb-1">
+                반려 코멘트 (학생 알림용)
+              </label>
+              <textarea
+                rows={3}
+                value={rejectReasonInput}
+                onChange={(e) => setRejectReasonInput(e.target.value)}
+                placeholder="예: 실천한 내용을 조금 더 구체적으로 작성해 주세요! 내일 다시 도전해 봐요."
+                className="w-full rounded-xl bg-white border border-[#E2DDD3] p-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#141413]"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setRejectModalSub(null)}
+                className="px-4 py-2.5 rounded-xl bg-[#EFECE6] text-xs font-bold text-[#4A463F] cursor-pointer hover:bg-[#E2DDD3]"
+              >
+                취소
+              </button>
+              <button
+                type="submit"
+                disabled={Boolean(reviewingId)}
+                className="px-4 py-2.5 rounded-xl bg-rose-600 text-white text-xs font-extrabold cursor-pointer hover:bg-rose-700 shadow-xs"
+              >
+                {reviewingId ? '처리 중...' : '확인, 반려 처리하기'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* =========================================================================
+       * MODAL B: Deletion & Score Reversal Modal
+       * ======================================================================= */}
+      {deleteModalSub && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <form
+            onSubmit={handleDeleteSubmissionSubmit}
+            className="bg-[#FBF9F5] rounded-[32px] max-w-md w-full p-6 space-y-4 shadow-xl border border-rose-200"
+          >
+            <h3 className="text-lg font-extrabold text-[#141413]">
+              활동 기록 삭제 및 지급 점수 회수
+            </h3>
+            <p className="text-xs text-rose-700 font-bold">
+              기록이 삭제되며 이미 지급되었던 점수는 학생의 총점에서 자동 차감됩니다.
+            </p>
+            <div>
+              <label className="block text-xs font-bold text-[#141413] mb-1">
+                삭제 사유 (감사 로그에 기록됩니다)
+              </label>
+              <input
+                type="text"
+                value={deleteReasonInput}
+                onChange={(e) => setDeleteReasonInput(e.target.value)}
+                placeholder="예: 부적절 표현 포함 또는 중복 등록 기록 정리"
+                required
+                className="w-full rounded-xl bg-white border border-[#E2DDD3] px-3.5 py-2.5 text-xs focus:outline-none focus:ring-2 focus:ring-[#141413]"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setDeleteModalSub(null)}
+                className="px-4 py-2.5 rounded-xl bg-[#EFECE6] text-xs font-bold text-[#4A463F] cursor-pointer hover:bg-[#E2DDD3]"
+              >
+                취소
+              </button>
+              <button
+                type="submit"
+                disabled={Boolean(reviewingId)}
+                className="px-4 py-2.5 rounded-xl bg-rose-600 text-white text-xs font-extrabold cursor-pointer hover:bg-rose-700 shadow-xs"
+              >
+                {reviewingId ? '삭제 중...' : '확인, 영구 삭제 및 점수 회수'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* =========================================================================
+       * SECTION 2: CLASSROOM MISSION DEFINITIONS & ADD MISSION FORM
+       * ======================================================================= */}
+      <div className="space-y-4 pt-4 border-t border-[#E2DDD3]">
+        <div>
+          <h2 className="text-xl font-extrabold text-[#141413]">
+            ⚙️ 학급 마니또 미션 목록 및 새 미션 등록 ({sortedMissions.length}개)
+          </h2>
+          <p className="text-xs text-[#6B665E] mt-0.5">
+            우리 반 실정에 맞는 특별 마니또 미션을 추가하고 점수 및 교사 승인 여부를 설정합니다.
+          </p>
+        </div>
+
+        {/* Add Mission Form */}
+        <form
+          onSubmit={handleAddMission}
+          className="bg-[#F3EFEA] rounded-[28px] p-6 space-y-4 border border-[#E2DDD3]"
+        >
+          <h3 className="text-sm font-extrabold text-[#141413]">+ 새 마니또 미션 추가하기</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="미션 제목 (예: 급식 시간에 감사 인사하기)"
+              required
+              className="rounded-xl bg-white px-3.5 py-2.5 text-xs font-bold text-[#141413] focus:outline-none focus:ring-2 focus:ring-[#141413]"
+            />
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value as MissionCategory)}
+              className="rounded-xl bg-white px-3.5 py-2.5 text-xs font-bold text-[#141413] focus:outline-none focus:ring-2 focus:ring-[#141413]"
+            >
+              <option value="kindness">친절·인사</option>
+              <option value="observation">관찰·장점 발견</option>
+              <option value="care">배려·도움</option>
+              <option value="gratitude">감사·편지</option>
+              <option value="cooperation">학급 협력</option>
+            </select>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={5}
+                max={50}
+                step={5}
+                value={points}
+                onChange={(e) => setPoints(Number(e.target.value))}
+                className="w-20 rounded-xl bg-white px-3 py-2.5 text-xs font-bold tabular-nums text-[#141413] focus:outline-none focus:ring-2 focus:ring-[#141413]"
+              />
+              <span className="text-xs font-bold text-[#141413]">점</span>
+              <label className="flex items-center gap-1.5 text-xs font-bold text-[#141413] ml-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={requiresApproval}
+                  onChange={(e) => setRequiresApproval(e.target.checked)}
+                  className="w-4 h-4 accent-[#141413] cursor-pointer"
+                />
+                <span>교사 승인 필요</span>
+              </label>
+            </div>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <input
+              type="text"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="미션 상세 설명 및 실천 방법..."
+              required
+              className="flex-1 rounded-xl bg-white px-3.5 py-2.5 text-xs text-[#141413] focus:outline-none focus:ring-2 focus:ring-[#141413]"
+            />
+            <button
+              type="submit"
+              className="px-5 py-2.5 rounded-xl bg-[#141413] text-white text-xs font-extrabold hover:bg-[#2C2A27] cursor-pointer whitespace-nowrap shrink-0 shadow-xs"
+            >
+              미션 등록
+            </button>
+          </div>
+        </form>
+
+        {/* Missions Definitions List */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+          {sortedMissions.map((m) => (
+            <div
+              key={m.missionId}
+              className={`rounded-2xl p-4 flex items-center justify-between gap-3 border transition-all ${
+                m.active
+                  ? 'bg-white border-[#E2DDD3] shadow-xs'
+                  : 'bg-[#EFECE6] border-gray-300 opacity-60'
+              }`}
+            >
+              <div>
+                <p className="text-xs font-extrabold text-[#141413]">
+                  {String(m.orderIndex).padStart(2, '0')}. {m.title} (+{m.points}점)
+                </p>
+                <p className="text-[11px] text-[#5C574F] mt-0.5">
+                  {m.requiresTeacherApproval ? '🔒 선생님 확인 후 승인' : '⚡ 실천 기록 시 자동 승인'} · 최대{' '}
+                  {m.maxCompletions}회
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleToggleMissionActive(m)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-extrabold cursor-pointer shrink-0 transition-colors shadow-xs ${
+                  m.active ? 'bg-[#F3EFEA] text-[#141413] hover:bg-[#E2DDD3]' : 'bg-[#141413] text-white hover:bg-[#2C2A27]'
+                }`}
+              >
+                {m.active ? '활성 중' : '비활성'}
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -2527,7 +3404,7 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
   onNotify,
 }) => {
   const sessionId = loungeSession?.sessionId || 'session_shindong_5_2';
-  const currentStatus = loungeSession?.status || 'waiting';
+  const currentStatus = loungeSession?.status || 'active';
 
   const [title, setTitle] = useState(
     loungeSession?.title || '5학년 2반 따뜻한 칭찬 라운지'
@@ -2541,9 +3418,20 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
     loungeSession?.noticeRules || '친구의 장점을 칭찬하고 서로를 응원하는 고운 말을 사용해요.'
   );
 
-  // Teacher Real Name Visibility Toggle (Requested: ON/OFF toggle)
+  // Teacher Real Name Visibility Toggle
   const [showRealNames, setShowRealNames] = useState(true);
   const [batchDeletingMsgs, setBatchDeletingMsgs] = useState(false);
+
+  // Compute live logged-in students currently viewing/connected to the lounge (active in last 3 mins)
+  const liveLoungeViewers = useMemo(() => {
+    const now = Date.now();
+    return loungeParticipants.filter((p) => {
+      if (p.presenceStatus === 'left') return false;
+      if (!p.lastHeartbeatAt) return false;
+      const diffMs = now - new Date(p.lastHeartbeatAt).getTime();
+      return diffMs <= 3 * 60 * 1000;
+    });
+  }, [loungeParticipants]);
 
   // Initialize or Open lounge session if none exists
   const handleInitLoungeSession = async () => {
@@ -2565,7 +3453,7 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
         updatedAt: new Date().toISOString(),
       };
       await setDoc(doc(db, 'loungeSessions', sessionId), newSession);
-      onNotify('익명 학급 라운지가 즉시 개설되고 [대화 시작] 상태로 전환되었습니다!', 'success');
+      onNotify('익명 학급 라운지가 즉시 개설되고 [자유 대화 진행 중] 상태로 전환되었습니다!', 'success');
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'loungeSessions');
     }
@@ -2624,7 +3512,12 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
         reason: '교사에 의한 익명 라운지 운영 상태 변경',
         metadataSummary: `status -> ${status}`,
       });
-      onNotify(`라운지 상태가 [${status}](으)로 변경되었습니다.`, 'success');
+      onNotify(
+        status === 'active'
+          ? '라운지가 자유 대화 작성 모드로 전환되었습니다.'
+          : '라운지가 읽기 전용 종료 상태로 전환되었습니다.',
+        'success'
+      );
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, 'loungeSessions');
     }
@@ -2723,7 +3616,7 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <p className="text-xs font-semibold text-[#6B665E] mb-1">
-            라운지 운영 시간 설정 · 대기실/대화방 제어 · 실명 표시 ON/OFF 및 대화 관리
+            라운지 운영 시간 및 자유 대화 관리 · 실시간 열람 인원 확인 · 실명 표시 ON/OFF
           </p>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-[#141413]">
             익명 학급 라운지 운영 및 대화 기록 관리
@@ -2775,25 +3668,23 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
       {/* Status Control Buttons */}
       <div className="bg-[#DDD5F8] rounded-[28px] p-6 flex flex-wrap items-center justify-between gap-4">
         <div>
-          <span className="text-xs font-bold text-[#3730A3]">현재 라운지 상태 제어</span>
+          <span className="text-xs font-bold text-[#3730A3]">라운지 진행 상태 제어</span>
           <h2 className="text-lg font-extrabold text-[#141413] mt-0.5">
-            현재 상태: {currentStatus.toUpperCase()}
+            현재 상태: {currentStatus === 'active' ? '🟢 자유 대화 진행 중' : '🔴 라운지 종료/점검 중'}
           </h2>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           {(
             [
-              { id: 'scheduled', label: '1. 운영 예정' },
-              { id: 'waiting', label: '2. 대기실 열기' },
-              { id: 'active', label: '3. 라운지 시작 (대화 허용)' },
-              { id: 'ended', label: '4. 라운지 종료 (전송 차단)' },
+              { id: 'active', label: '🟢 자유 대화 열기' },
+              { id: 'ended', label: '🔴 라운지 종료 / 읽기 전용' },
             ] as const
           ).map((btn) => (
             <button
               key={btn.id}
               onClick={() => handleSetStatus(btn.id)}
-              className={`px-4 py-2 rounded-xl text-xs font-bold cursor-pointer transition-colors ${
+              className={`px-4 py-2.5 rounded-xl text-xs font-extrabold cursor-pointer transition-colors ${
                 currentStatus === btn.id
                   ? 'bg-[#141413] text-white shadow-xs'
                   : 'bg-white text-[#141413] hover:bg-white/80'
@@ -2810,7 +3701,7 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
         onSubmit={handleUpdateSchedule}
         className="bg-[#F3EFEA] rounded-[28px] p-6 space-y-4"
       >
-        <h3 className="text-base font-extrabold text-[#141413]">라운지 일정 및 규칙 설정</h3>
+        <h3 className="text-base font-extrabold text-[#141413]">라운지 일정 및 공지 규칙 설정</h3>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <input
             type="text"
@@ -2858,38 +3749,37 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
         </div>
       </form>
 
-      {/* Active Participants List */}
+      {/* Active Viewers List */}
       <div className="bg-[#E0F2FE] rounded-[28px] p-6 space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="text-base font-extrabold text-[#0369A1]">
-            현재 라운지 접속 / 대기 참여자 ({loungeParticipants.length}명)
-          </h3>
+          <div className="flex items-center gap-2">
+            <span className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+            <h3 className="text-base font-extrabold text-[#0369A1]">
+              👀 현재 라운지 실시간 접속 및 열람 학생 ({liveLoungeViewers.length}명)
+            </h3>
+          </div>
           <span className="text-xs text-[#0284C7] font-bold">
-            {showRealNames ? '실명 매핑 표시 중' : '익명 모드'}
+            {showRealNames ? '실명 매핑 ON (교사 전용)' : '익명 별명 모드'}
           </span>
         </div>
 
-        {loungeParticipants.length === 0 ? (
-          <p className="text-xs text-[#0284C7]">현재 접속 중인 참여자가 없습니다.</p>
+        {liveLoungeViewers.length === 0 ? (
+          <p className="text-xs text-[#0284C7]">현재 접속하여 라운지를 열람 중인 학생이 없습니다.</p>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {loungeParticipants.map((p) => {
+            {liveLoungeViewers.map((p) => {
               const realStu = allUsers.find((u) => u.uid === p.participantUid);
               return (
                 <div
                   key={p.participantUid}
-                  className="bg-white px-3 py-1.5 rounded-xl border border-[#BAE6FD] flex items-center gap-1.5 text-xs font-bold shadow-xs"
+                  className="bg-white px-3.5 py-2 rounded-xl border border-[#BAE6FD] flex items-center gap-2 text-xs font-bold shadow-xs"
                 >
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                   <span className="text-[#141413]">[{p.anonymousAlias}]</span>
                   {showRealNames && (
-                    <span className="text-indigo-700 font-extrabold ml-1">
-                      (실명: {realStu ? `${realStu.displayName} (${realStu.studentLoginId})` : '학생'})
+                    <span className="text-indigo-800 font-extrabold bg-indigo-50 px-2 py-0.5 rounded-md">
+                      실명: {realStu ? `${realStu.displayName} (${realStu.studentLoginId})` : '학생'}
                     </span>
                   )}
-                  <span className="text-[10px] text-[#6B665E]">
-                    {p.presenceStatus === 'waiting' ? '대기 중' : '대화방'}
-                  </span>
                 </div>
               );
             })}
