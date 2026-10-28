@@ -81,122 +81,188 @@ function getDateDaysAgo(daysAgo: number): string {
 }
 
 /**
- * Seeds the initial Jeonju Shindong Elementary 5-2 Classroom workspace if not yet initialized
+ * Helper: Queries existing document IDs in a collection for this workspace
+ * and only creates documents that do not yet exist (preventing update timestamp rule conflicts
+ * and recovering cleanly from any previously interrupted partial seed).
+ */
+async function seedCollectionIfMissing(
+  colName: string,
+  workspaceOwnerUid: string,
+  docsToSeed: Array<{ id: string; data: Record<string, unknown> }>
+): Promise<void> {
+  if (docsToSeed.length === 0) return;
+  const q = query(
+    collection(db, colName),
+    where('workspaceOwnerUid', '==', workspaceOwnerUid)
+  );
+  const snap = await getDocs(q);
+  const existingIds = new Set(snap.docs.map((d) => d.id));
+  const missing = docsToSeed.filter((item) => !existingIds.has(item.id));
+  if (missing.length === 0) return;
+
+  await Promise.all(
+    missing.map((item) => setDoc(doc(db, colName, item.id), item.data))
+  );
+}
+
+/**
+ * Seeds the initial Jeonju Shindong Elementary 5-2 Classroom workspace if not yet initialized.
+ * Safe against partial/interrupted runs and executes in fast parallel batches.
  */
 export async function ensureWorkspaceSeeded(workspaceOwnerUid: string): Promise<void> {
-  const classRef = doc(db, 'classes', 'class_5_2');
-  try {
-    const snap = await getDoc(classRef);
-    if (snap.exists() && snap.data()?.workspaceOwnerUid === workspaceOwnerUid) {
-      return;
-    }
-  } catch {
-    // Document may not exist or belong to another session; proceed with scoped doc IDs
-  }
-
   const prefix = workspaceOwnerUid.slice(0, 8);
   const scopedClassId = `class_${prefix}_5_2`;
-  const scopedClassRef = doc(db, 'classes', scopedClassId);
 
   try {
-    const existingClass = await getDoc(scopedClassRef);
-    if (existingClass.exists()) {
+    // Quick check: if users, missions, and badges are all populated, skip full seed
+    const [usersSnap, missionsSnap, badgesSnap] = await Promise.all([
+      getDocs(query(collection(db, 'users'), where('workspaceOwnerUid', '==', workspaceOwnerUid))),
+      getDocs(query(collection(db, 'missions'), where('workspaceOwnerUid', '==', workspaceOwnerUid))),
+      getDocs(query(collection(db, 'badges'), where('workspaceOwnerUid', '==', workspaceOwnerUid))),
+    ]);
+
+    if (usersSnap.size >= 2 && missionsSnap.size >= 20 && badgesSnap.size >= 5) {
       return;
     }
-  } catch {
-    // Continue creating initial seed
-  }
 
-  try {
-    // 1. Classroom
+    // 1. Seed Users FIRST (1 Teacher + 6 Students) so Login Roster renders immediately
+    const users = getInitialUsers(workspaceOwnerUid);
+    await seedCollectionIfMissing(
+      'users',
+      workspaceOwnerUid,
+      users.map((u) => {
+        const uId = `${prefix}_${u.uid}`;
+        return {
+          id: uId,
+          data: {
+            ...u,
+            uid: uId,
+            classId: scopedClassId,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+        };
+      })
+    );
+
+    // 2. Seed Classroom & App Settings
     const baseClass = getInitialClassroom(workspaceOwnerUid);
-    await setDoc(scopedClassRef, {
-      ...baseClass,
-      classId: scopedClassId,
-      teacherUids: [`teacher_${prefix}`],
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-
-    // 2. App Settings
     const settingsId = `settings_${prefix}`;
     const baseSettings = getInitialAppSettings(workspaceOwnerUid);
-    await setDoc(doc(db, 'appSettings', settingsId), {
-      ...baseSettings,
-      settingId: settingsId,
-      updatedBy: `teacher_${prefix}`,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
 
-    // 3. Missions (20)
+    await Promise.all([
+      seedCollectionIfMissing('classes', workspaceOwnerUid, [
+        {
+          id: scopedClassId,
+          data: {
+            ...baseClass,
+            classId: scopedClassId,
+            teacherUids: [`${prefix}_teacher_main`],
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+        },
+      ]),
+      seedCollectionIfMissing('appSettings', workspaceOwnerUid, [
+        {
+          id: settingsId,
+          data: {
+            ...baseSettings,
+            settingId: settingsId,
+            updatedBy: `${prefix}_teacher_main`,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+        },
+      ]),
+    ]);
+
+    // 3. Seed Missions (20) & Badges (5) in parallel
     const missions = getInitialMissions(workspaceOwnerUid);
-    for (const m of missions) {
-      const mId = `${prefix}_${m.missionId}`;
-      await setDoc(doc(db, 'missions', mId), {
-        ...m,
-        missionId: mId,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    }
-
-    // 4. Badges (5)
     const badges = getInitialBadges(workspaceOwnerUid);
-    for (const b of badges) {
-      const bId = `${prefix}_${b.badgeId}`;
-      await setDoc(doc(db, 'badges', bId), {
-        ...b,
-        badgeId: bId,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    }
 
-    // 5. Users (1 Teacher + 6 Students)
-    const users = getInitialUsers(workspaceOwnerUid);
-    for (const u of users) {
-      const uId = `${prefix}_${u.uid}`;
-      await setDoc(doc(db, 'users', uId), {
-        ...u,
-        uid: uId,
-        classId: scopedClassId,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    }
-
-    // 6. Manitto Assignments + Letter Threads
-    const assignments = getInitialAssignments(workspaceOwnerUid);
-    for (const a of assignments) {
-      const aId = `${prefix}_${a.assignmentId}`;
-      const giverUid = `${prefix}_${a.giverUid}`;
-      const receiverUid = `${prefix}_${a.receiverUid}`;
-      await setDoc(doc(db, 'manittoAssignments', aId), {
-        ...a,
-        assignmentId: aId,
-        classId: scopedClassId,
-        giverUid,
-        receiverUid,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-
-      const threadId = `${prefix}_thread_${a.assignmentId}`;
-      await setDoc(doc(db, 'letterThreads', threadId), {
-        threadId,
+    await Promise.all([
+      seedCollectionIfMissing(
+        'missions',
         workspaceOwnerUid,
-        classId: scopedClassId,
-        assignmentId: aId,
-        participantUids: [giverUid, receiverUid],
-        lastMessageAt: new Date().toISOString(),
-        status: 'active',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    }
+        missions.map((m) => {
+          const mId = `${prefix}_${m.missionId}`;
+          return {
+            id: mId,
+            data: {
+              ...m,
+              missionId: mId,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            },
+          };
+        })
+      ),
+      seedCollectionIfMissing(
+        'badges',
+        workspaceOwnerUid,
+        badges.map((b) => {
+          const bId = `${prefix}_${b.badgeId}`;
+          return {
+            id: bId,
+            data: {
+              ...b,
+              badgeId: bId,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            },
+          };
+        })
+      ),
+    ]);
 
-    // 7. Initial Mission Submissions & Score Ledger & Student Stats
+    // 4. Seed Manitto Assignments & Letter Threads
+    const assignments = getInitialAssignments(workspaceOwnerUid);
+    await Promise.all([
+      seedCollectionIfMissing(
+        'manittoAssignments',
+        workspaceOwnerUid,
+        assignments.map((a) => {
+          const aId = `${prefix}_${a.assignmentId}`;
+          return {
+            id: aId,
+            data: {
+              ...a,
+              assignmentId: aId,
+              classId: scopedClassId,
+              giverUid: `${prefix}_${a.giverUid}`,
+              receiverUid: `${prefix}_${a.receiverUid}`,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            },
+          };
+        })
+      ),
+      seedCollectionIfMissing(
+        'letterThreads',
+        workspaceOwnerUid,
+        assignments.map((a) => {
+          const aId = `${prefix}_${a.assignmentId}`;
+          const threadId = `${prefix}_thread_${a.assignmentId}`;
+          return {
+            id: threadId,
+            data: {
+              threadId,
+              workspaceOwnerUid,
+              classId: scopedClassId,
+              assignmentId: aId,
+              participantUids: [`${prefix}_${a.giverUid}`, `${prefix}_${a.receiverUid}`],
+              lastMessageAt: new Date().toISOString(),
+              status: 'active',
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            },
+          };
+        })
+      ),
+    ]);
+
+    // 5. Initial Mission Submissions, Score Ledger, Badge Awards, and Student Stats
     const initialSubmissions: Array<{
       subKey: string;
       studentShort: string;
@@ -338,6 +404,9 @@ export async function ensureWorkspaceSeeded(workspaceOwnerUid: string): Promise<
       student_06: { points: 0, count: 0 },
     };
 
+    const subDocsToSeed: Array<{ id: string; data: Record<string, unknown> }> = [];
+    const ledgerDocsToSeed: Array<{ id: string; data: Record<string, unknown> }> = [];
+
     for (const item of initialSubmissions) {
       const subId = `${prefix}_${item.subKey}`;
       const studentUid = `${prefix}_${item.studentShort}`;
@@ -345,23 +414,26 @@ export async function ensureWorkspaceSeeded(workspaceOwnerUid: string): Promise<
       const actDate = getDateDaysAgo(item.daysAgo);
       const isApproved = item.status === 'approved';
 
-      await setDoc(doc(db, 'missionSubmissions', subId), {
-        submissionId: subId,
-        workspaceOwnerUid,
-        missionId,
-        studentUid,
-        classId: scopedClassId,
-        actionDescription: item.action,
-        reflection: item.reflection,
-        activityDate: actDate,
-        evidenceNote: '교실 실천 기록 확인',
-        status: item.status,
-        awardedPoints: isApproved ? item.points : 0,
-        reviewedBy: isApproved ? `${prefix}_teacher_main` : '',
-        reviewedAt: isApproved ? new Date().toISOString() : '',
-        reviewComment: isApproved ? '참 잘했어요! 따뜻한 배려가 돋보여요.' : '',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+      subDocsToSeed.push({
+        id: subId,
+        data: {
+          submissionId: subId,
+          workspaceOwnerUid,
+          missionId,
+          studentUid,
+          classId: scopedClassId,
+          actionDescription: item.action,
+          reflection: item.reflection,
+          activityDate: actDate,
+          evidenceNote: '교실 실천 기록 확인',
+          status: item.status,
+          awardedPoints: isApproved ? item.points : 0,
+          reviewedBy: isApproved ? `${prefix}_teacher_main` : '',
+          reviewedAt: isApproved ? new Date().toISOString() : '',
+          reviewComment: isApproved ? '참 잘했어요! 따뜻한 배려가 돋보여요.' : '',
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
       });
 
       if (isApproved) {
@@ -369,222 +441,379 @@ export async function ensureWorkspaceSeeded(workspaceOwnerUid: string): Promise<
         pointsPerStudent[item.studentShort].count += 1;
 
         const ledgerId = `${prefix}_ledger_${item.subKey}`;
-        await setDoc(doc(db, 'scoreLedger', ledgerId), {
-          ledgerId,
-          workspaceOwnerUid,
-          studentUid,
-          classId: scopedClassId,
-          sourceType: 'mission',
-          sourceId: subId,
-          pointsDelta: item.points,
-          activityDate: actDate,
-          reason: `미션 달성 보상 (${item.missionShort})`,
-          createdBy: `${prefix}_teacher_main`,
-          reversalOf: '',
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
+        ledgerDocsToSeed.push({
+          id: ledgerId,
+          data: {
+            ledgerId,
+            workspaceOwnerUid,
+            studentUid,
+            classId: scopedClassId,
+            sourceType: 'mission',
+            sourceId: subId,
+            pointsDelta: item.points,
+            activityDate: actDate,
+            reason: `미션 달성 보상 (${item.missionShort})`,
+            createdBy: `${prefix}_teacher_main`,
+            reversalOf: '',
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
         });
       }
     }
 
-    // 8. Initial Badge Award for student_01 (친절의 새싹)
     const firstAwardId = `${prefix}_award_s01_b01`;
-    await setDoc(doc(db, 'badgeAwards', firstAwardId), {
-      awardId: firstAwardId,
-      workspaceOwnerUid,
-      studentUid: `${prefix}_student_01`,
-      badgeId: `${prefix}_badge_01_sprout`,
-      classId: scopedClassId,
-      awardedAt: getDateDaysAgo(4),
-      criteriaSnapshot: '첫 번째 미션 완료 달성',
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-
-    // Save StudentStats for all 6 students
-    for (const sKey of Object.keys(pointsPerStudent)) {
+    const statsDocsToSeed = Object.keys(pointsPerStudent).map((sKey) => {
       const sUid = `${prefix}_${sKey}`;
       const badgeCount = sKey === 'student_01' ? 1 : 0;
-      await setDoc(doc(db, 'studentStats', sUid), {
-        studentUid: sUid,
-        workspaceOwnerUid,
-        classId: scopedClassId,
-        totalPoints: pointsPerStudent[sKey].points,
-        completedMissionCount: pointsPerStudent[sKey].count,
-        earnedBadgeCount: badgeCount,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    }
+      return {
+        id: sUid,
+        data: {
+          studentUid: sUid,
+          workspaceOwnerUid,
+          classId: scopedClassId,
+          totalPoints: pointsPerStudent[sKey].points,
+          completedMissionCount: pointsPerStudent[sKey].count,
+          earnedBadgeCount: badgeCount,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+      };
+    });
 
-    // 9. Sample Anonymous Letters for student_01 (both as Giver to student_02 and Receiver from student_06)
+    await Promise.all([
+      seedCollectionIfMissing('missionSubmissions', workspaceOwnerUid, subDocsToSeed),
+      seedCollectionIfMissing('scoreLedger', workspaceOwnerUid, ledgerDocsToSeed),
+      seedCollectionIfMissing('badgeAwards', workspaceOwnerUid, [
+        {
+          id: firstAwardId,
+          data: {
+            awardId: firstAwardId,
+            workspaceOwnerUid,
+            studentUid: `${prefix}_student_01`,
+            badgeId: `${prefix}_badge_01_sprout`,
+            classId: scopedClassId,
+            awardedAt: getDateDaysAgo(4),
+            criteriaSnapshot: '첫 번째 미션 완료 달성',
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+        },
+      ]),
+      seedCollectionIfMissing('studentStats', workspaceOwnerUid, statsDocsToSeed),
+    ]);
+
+    // 6. Sample Anonymous Letters, Active Lounge Session, Messages, and Audit Log
     const letter1Id = `${prefix}_letter_01`;
-    await setDoc(doc(db, 'letters', letter1Id), {
-      letterId: letter1Id,
-      workspaceOwnerUid,
-      threadId: `${prefix}_thread_assign_06`,
-      classId: scopedClassId,
-      senderUid: `${prefix}_student_06`,
-      receiverUid: `${prefix}_student_01`,
-      senderDirection: 'from_manitto',
-      subject: '하늘아! 오늘 미술 시간에 그림 정말 멋졌어 🎨',
-      body: '안녕! 나는 너를 몰래 응원하는 마니또야. 오늘 미술 시간에 네가 그린 가을 풍경 그림이 정말 따뜻하고 예뻐서 깜짝 놀랐어. 또 짝꿍에게 지우개를 친절하게 빌려주는 모습도 정말 보기 좋았어! 내일도 즐거운 하루 보내길 응원할게!',
-      readAt: '',
-      moderationStatus: 'normal',
-      deletedAt: '',
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-
     const letter2Id = `${prefix}_letter_02`;
-    await setDoc(doc(db, 'letters', letter2Id), {
-      letterId: letter2Id,
-      workspaceOwnerUid,
-      threadId: `${prefix}_thread_assign_01`,
-      classId: scopedClassId,
-      senderUid: `${prefix}_student_01`,
-      receiverUid: `${prefix}_student_02`,
-      senderDirection: 'from_manitto',
-      subject: '언제나 활기찬 내 마니또 친구에게 보내는 응원 편지!',
-      body: '안녕! 체육 시간에 피구할 때 친구들을 배려하면서 멋지게 패스하는 모습을 봤어. 네 덕분에 우리 반이 항상 활기차고 즐거워! 앞으로도 내가 뒤에서 열심히 응원할게 화이팅!',
-      readAt: new Date().toISOString(),
-      moderationStatus: 'normal',
-      deletedAt: '',
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-
-    // 10. Active Lounge Session + Sample Messages
     const sessionId = `${prefix}_lounge_today`;
     const todayStr = new Date().toISOString().slice(0, 10);
-    await setDoc(doc(db, 'loungeSessions', sessionId), {
-      sessionId,
-      workspaceOwnerUid,
-      classId: scopedClassId,
-      title: '5학년 2반 금요일 칭찬 & 마니또 힌트 라운지',
-      noticeRules:
-        '고운 말과 따뜻한 칭찬만 나누어요! 실명이나 마니또 정체를 직접 밝히지 말고 따뜻한 힌트와 고마움을 나누어 보세요.',
-      scheduledDate: todayStr,
-      startsAt: '08:30',
-      endsAt: '22:00',
-      status: 'active',
-      waitingCount: 1,
-      participantCount: 3,
-      createdBy: `${prefix}_teacher_main`,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-
-    // Participants in Lounge
     const p1Uid = `${prefix}_student_01`;
-    await setDoc(doc(db, 'loungeSessions', sessionId, 'participants', p1Uid), {
-      participantUid: p1Uid,
-      workspaceOwnerUid,
-      sessionId,
-      anonymousAlias: '구름 위 토끼',
-      presenceStatus: 'active',
-      aliasChangeCount: 0,
-      joinedAt: new Date().toISOString(),
-      lastHeartbeatAt: new Date().toISOString(),
-      aliasChangedAt: new Date().toISOString(),
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-
     const p2Uid = `${prefix}_student_02`;
-    await setDoc(doc(db, 'loungeSessions', sessionId, 'participants', p2Uid), {
-      participantUid: p2Uid,
-      workspaceOwnerUid,
-      sessionId,
-      anonymousAlias: '초록빛 다람쥐',
-      presenceStatus: 'active',
-      aliasChangeCount: 0,
-      joinedAt: new Date().toISOString(),
-      lastHeartbeatAt: new Date().toISOString(),
-      aliasChangedAt: new Date().toISOString(),
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-
     const p3Uid = `${prefix}_student_03`;
-    await setDoc(doc(db, 'loungeSessions', sessionId, 'participants', p3Uid), {
-      participantUid: p3Uid,
-      workspaceOwnerUid,
-      sessionId,
-      anonymousAlias: '민트색 고양이',
-      presenceStatus: 'active',
-      aliasChangeCount: 0,
-      joinedAt: new Date().toISOString(),
-      lastHeartbeatAt: new Date().toISOString(),
-      aliasChangedAt: new Date().toISOString(),
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-
     const p6Uid = `${prefix}_student_06`;
-    await setDoc(doc(db, 'loungeSessions', sessionId, 'participants', p6Uid), {
-      participantUid: p6Uid,
-      workspaceOwnerUid,
-      sessionId,
-      anonymousAlias: '별똥별 여우',
-      presenceStatus: 'waiting',
-      aliasChangeCount: 0,
-      joinedAt: new Date().toISOString(),
-      lastHeartbeatAt: new Date().toISOString(),
-      aliasChangedAt: new Date().toISOString(),
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-
     const msg1Id = `${prefix}_lmsg_01`;
-    await setDoc(doc(db, 'loungeMessages', msg1Id), {
-      messageId: msg1Id,
-      workspaceOwnerUid,
-      sessionId,
-      classId: scopedClassId,
-      senderUid: p2Uid,
-      anonymousAlias: '초록빛 다람쥐',
-      body: '오늘 사물함에 응원 편지 남겨준 내 마니또 정말 고마워! 읽고 기분이 너무 좋았어 😊',
-      moderationStatus: 'normal',
-      hiddenAt: '',
-      hiddenBy: '',
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-
     const msg2Id = `${prefix}_lmsg_02`;
-    await setDoc(doc(db, 'loungeMessages', msg2Id), {
-      messageId: msg2Id,
-      workspaceOwnerUid,
-      sessionId,
-      classId: scopedClassId,
-      senderUid: p3Uid,
-      anonymousAlias: '민트색 고양이',
-      body: '우리 반 친구들 오늘 체육 시간 피구할 때 서로 양보하는 모습 진짜 멋졌어!',
-      moderationStatus: 'normal',
-      hiddenAt: '',
-      hiddenBy: '',
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-
-    // 11. Initial Audit Log
     const log1Id = `${prefix}_audit_init`;
-    await setDoc(doc(db, 'auditLogs', log1Id), {
-      logId: log1Id,
-      workspaceOwnerUid,
-      actorUid: `${prefix}_teacher_main`,
-      actorName: '김신동 선생님',
-      action: 'CLASSROOM_INITIALIZED',
-      targetType: 'class',
-      targetId: scopedClassId,
-      reason: '전주신동초 5학년 2반 마니또 학기 운영 초기화 및 기본 미션 20종 설정',
-      metadataSummary: '학생 6명, 마니또 배정 6건, 기본 미션 20개, 뱃지 5종 생성 완료',
-      createdAt: serverTimestamp(),
-    });
+
+    await Promise.all([
+      seedCollectionIfMissing('letters', workspaceOwnerUid, [
+        {
+          id: letter1Id,
+          data: {
+            letterId: letter1Id,
+            workspaceOwnerUid,
+            threadId: `${prefix}_thread_assign_06`,
+            classId: scopedClassId,
+            senderUid: `${prefix}_student_06`,
+            receiverUid: `${prefix}_student_01`,
+            senderDirection: 'from_manitto',
+            subject: '하늘아! 오늘 미술 시간에 그림 정말 멋졌어 🎨',
+            body: '안녕! 나는 너를 몰래 응원하는 마니또야. 오늘 미술 시간에 네가 그린 가을 풍경 그림이 정말 따뜻하고 예뻐서 깜짝 놀랐어. 또 짝꿍에게 지우개를 친절하게 빌려주는 모습도 정말 보기 좋았어! 내일도 즐거운 하루 보내길 응원할게!',
+            readAt: '',
+            moderationStatus: 'normal',
+            deletedAt: '',
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+        },
+        {
+          id: letter2Id,
+          data: {
+            letterId: letter2Id,
+            workspaceOwnerUid,
+            threadId: `${prefix}_thread_assign_01`,
+            classId: scopedClassId,
+            senderUid: `${prefix}_student_01`,
+            receiverUid: `${prefix}_student_02`,
+            senderDirection: 'from_manitto',
+            subject: '언제나 활기찬 내 마니또 친구에게 보내는 응원 편지!',
+            body: '안녕! 체육 시간에 피구할 때 친구들을 배려하면서 멋지게 패스하는 모습을 봤어. 네 덕분에 우리 반이 항상 활기차고 즐거워! 앞으로도 내가 뒤에서 열심히 응원할게 화이팅!',
+            readAt: new Date().toISOString(),
+            moderationStatus: 'normal',
+            deletedAt: '',
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+        },
+      ]),
+      seedCollectionIfMissing('loungeSessions', workspaceOwnerUid, [
+        {
+          id: sessionId,
+          data: {
+            sessionId,
+            workspaceOwnerUid,
+            classId: scopedClassId,
+            title: '5학년 2반 금요일 칭찬 & 마니또 힌트 라운지',
+            noticeRules:
+              '고운 말과 따뜻한 칭찬만 나누어요! 실명이나 마니또 정체를 직접 밝히지 말고 따뜻한 힌트와 고마움을 나누어 보세요.',
+            scheduledDate: todayStr,
+            startsAt: '08:30',
+            endsAt: '22:00',
+            status: 'active',
+            waitingCount: 1,
+            participantCount: 3,
+            createdBy: `${prefix}_teacher_main`,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+        },
+      ]),
+      seedCollectionIfMissing('loungeMessages', workspaceOwnerUid, [
+        {
+          id: msg1Id,
+          data: {
+            messageId: msg1Id,
+            workspaceOwnerUid,
+            sessionId,
+            classId: scopedClassId,
+            senderUid: p2Uid,
+            anonymousAlias: '초록빛 다람쥐',
+            body: '오늘 사물함에 응원 편지 남겨준 내 마니또 정말 고마워! 읽고 기분이 너무 좋았어 😊',
+            moderationStatus: 'normal',
+            hiddenAt: '',
+            hiddenBy: '',
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+        },
+        {
+          id: msg2Id,
+          data: {
+            messageId: msg2Id,
+            workspaceOwnerUid,
+            sessionId,
+            classId: scopedClassId,
+            senderUid: p3Uid,
+            anonymousAlias: '민트색 고양이',
+            body: '우리 반 친구들 오늘 체육 시간 피구할 때 서로 양보하는 모습 진짜 멋졌어!',
+            moderationStatus: 'normal',
+            hiddenAt: '',
+            hiddenBy: '',
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+        },
+      ]),
+      seedCollectionIfMissing('auditLogs', workspaceOwnerUid, [
+        {
+          id: log1Id,
+          data: {
+            logId: log1Id,
+            workspaceOwnerUid,
+            actorUid: `${prefix}_teacher_main`,
+            actorName: '김신동 선생님',
+            action: 'CLASSROOM_INITIALIZED',
+            targetType: 'class',
+            targetId: scopedClassId,
+            reason: '전주신동초 5학년 2반 마니또 학기 운영 초기화 및 기본 미션 20종 설정',
+            metadataSummary: '학생 6명, 마니또 배정 6건, 기본 미션 20개, 뱃지 5종 생성 완료',
+            createdAt: serverTimestamp(),
+          },
+        },
+      ]),
+    ]);
+
+    // 7. Seed Lounge Participants subcollection if missing
+    const partPath = `loungeSessions/${sessionId}/participants`;
+    const partSnap = await getDocs(
+      query(collection(db, partPath), where('workspaceOwnerUid', '==', workspaceOwnerUid))
+    );
+    const existingPartIds = new Set(partSnap.docs.map((d) => d.id));
+    const initialParts = [
+      { uid: p1Uid, alias: '구름 위 토끼', status: 'active' },
+      { uid: p2Uid, alias: '초록빛 다람쥐', status: 'active' },
+      { uid: p3Uid, alias: '민트색 고양이', status: 'active' },
+      { uid: p6Uid, alias: '별똥별 여우', status: 'waiting' },
+    ].filter((p) => !existingPartIds.has(p.uid));
+
+    if (initialParts.length > 0) {
+      const nowIso = new Date().toISOString();
+      await Promise.all(
+        initialParts.map((p) =>
+          setDoc(doc(db, 'loungeSessions', sessionId, 'participants', p.uid), {
+            participantUid: p.uid,
+            workspaceOwnerUid,
+            sessionId,
+            anonymousAlias: p.alias,
+            presenceStatus: p.status,
+            aliasChangeCount: 0,
+            joinedAt: nowIso,
+            lastHeartbeatAt: nowIso,
+            aliasChangedAt: nowIso,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          })
+        )
+      );
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, 'workspaceSeed');
   }
+}
+
+/**
+ * Resets a student's password to the default '1234'
+ */
+export async function resetStudentPasswordTo1234(params: {
+  workspaceOwnerUid: string;
+  teacherUid: string;
+  teacherName: string;
+  student: UserProfile;
+}): Promise<void> {
+  const { workspaceOwnerUid, teacherUid, teacherName, student } = params;
+  try {
+    const pwHash = DEFAULT_PASSWORD_HASH_1234;
+    await updateDoc(doc(db, 'users', student.uid), {
+      passwordHash: pwHash,
+      updatedAt: serverTimestamp(),
+    });
+
+    await recordAuditLog({
+      workspaceOwnerUid,
+      actorUid: teacherUid,
+      actorName: teacherName,
+      action: 'PASSWORD_RESET',
+      targetType: 'user',
+      targetId: student.uid,
+      reason: '교사 관리자에 의한 초기 비밀번호(1234) 즉시 초기화',
+      metadataSummary: `${student.displayName} (${student.studentLoginId}) 비밀번호가 1234로 초기화됨`,
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `users/${student.uid}`);
+  }
+}
+
+/**
+ * Batch registers multiple students at once
+ */
+export async function createStudentsBatch(params: {
+  workspaceOwnerUid: string;
+  teacherUid: string;
+  teacherName: string;
+  classId: string;
+  students: Array<{ displayName: string; studentLoginId: string; avatarId?: string }>;
+}): Promise<{ count: number }> {
+  const { workspaceOwnerUid, teacherUid, teacherName, classId, students } = params;
+  const prefix = workspaceOwnerUid.slice(0, 8);
+  const nowIso = new Date().toISOString();
+  const defaultPw = DEFAULT_PASSWORD_HASH_1234;
+
+  const userWrites = students.map((stu, index) => {
+    const uid = `${prefix}_stu_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 6)}`;
+    const avatar = stu.avatarId || 'rabbit';
+    const cleanName = sanitizeText(stu.displayName, 60);
+    const cleanLoginId = sanitizeText(stu.studentLoginId, 64);
+
+    const userDocPromise = setDoc(doc(db, 'users', uid), {
+      uid,
+      workspaceOwnerUid,
+      role: 'student',
+      studentLoginId: cleanLoginId,
+      passwordHash: defaultPw,
+      displayName: cleanName,
+      classId,
+      avatarId: avatar,
+      bio: '전주신동초 마니또 친구예요!',
+      interests: ['독서'],
+      hobbies: ['일기 쓰기'],
+      favoriteFood: '',
+      strengths: '',
+      cheerWanted: '',
+      profileVisibility: 'manitto',
+      accountStatus: 'active',
+      lastLoginAt: nowIso,
+      lastHeartbeatAt: nowIso,
+      isOnlineSession: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    const statDocPromise = setDoc(doc(db, 'studentStats', uid), {
+      studentUid: uid,
+      workspaceOwnerUid,
+      classId,
+      totalPoints: 0,
+      completedMissionCount: 0,
+      earnedBadgeCount: 0,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    return Promise.all([userDocPromise, statDocPromise]);
+  });
+
+  await Promise.all(userWrites);
+
+  await recordAuditLog({
+    workspaceOwnerUid,
+    actorUid: teacherUid,
+    actorName: teacherName,
+    action: 'STUDENTS_BATCH_CREATED',
+    targetType: 'users',
+    targetId: `${students.length}_students`,
+    reason: `학생 ${students.length}명 일괄 명단 등록`,
+    metadataSummary: students.map((s) => s.displayName).join(', ').slice(0, 380),
+  });
+
+  return { count: students.length };
+}
+
+/**
+ * Batch deletes multiple students from Firestore
+ */
+export async function deleteStudentsBatch(params: {
+  workspaceOwnerUid: string;
+  teacherUid: string;
+  teacherName: string;
+  students: UserProfile[];
+}): Promise<{ count: number }> {
+  const { workspaceOwnerUid, teacherUid, teacherName, students } = params;
+  if (students.length === 0) return { count: 0 };
+
+  const deletePromises = students.map(async (stu) => {
+    await deleteDoc(doc(db, 'users', stu.uid));
+    try {
+      await deleteDoc(doc(db, 'studentStats', stu.uid));
+    } catch {
+      // Ignore if stat doc was already absent
+    }
+  });
+
+  await Promise.all(deletePromises);
+
+  await recordAuditLog({
+    workspaceOwnerUid,
+    actorUid: teacherUid,
+    actorName: teacherName,
+    action: 'STUDENTS_BATCH_DELETED',
+    targetType: 'users',
+    targetId: `${students.length}_students`,
+    reason: `교사 요청에 의한 학생 ${students.length}명 일괄 계정 및 통계 삭제`,
+    metadataSummary: students.map((s) => s.displayName).join(', ').slice(0, 380),
+  });
+
+  return { count: students.length };
 }
 
 /**

@@ -16,6 +16,11 @@ import {
   FileText,
   UserPlus,
   RefreshCw,
+  KeyRound,
+  UploadCloud,
+  CheckSquare,
+  Square,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -61,6 +66,9 @@ import {
   hashPassword,
   sanitizeText,
   isUserCurrentlyOnline,
+  resetStudentPasswordTo1234,
+  createStudentsBatch,
+  deleteStudentsBatch,
 } from '../services/manittoServerEngine';
 
 interface TeacherContextProps {
@@ -377,7 +385,7 @@ const TeacherStudentsView: React.FC<TeacherContextProps> = ({
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [sortBy, setSortBy] = useState<'name' | 'points' | 'missions'>('name');
 
-  // Create student state
+  // Single Student Registration State
   const [newName, setNewName] = useState('');
   const [newLoginId, setNewLoginId] = useState('');
   const [newPassword, setNewPassword] = useState('1234');
@@ -387,6 +395,22 @@ const TeacherStudentsView: React.FC<TeacherContextProps> = ({
   const [adjustingStudent, setAdjustingStudent] = useState<UserProfile | null>(null);
   const [pointsDelta, setPointsDelta] = useState<number>(5);
   const [adjustReason, setAdjustReason] = useState('');
+
+  // Password Reset to 1234 Modal State
+  const [resetTargetStudent, setResetTargetStudent] = useState<UserProfile | null>(null);
+  const [resettingPw, setResettingPw] = useState(false);
+
+  // Batch Registration State & Modal
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [batchText, setBatchText] = useState('');
+  const [batchPrefix, setBatchPrefix] = useState('shindong');
+  const [batchCreating, setBatchCreating] = useState(false);
+
+  // Batch Deletion State
+  const [selectedStudentUids, setSelectedStudentUids] = useState<Set<string>>(new Set());
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
+  const [deletingBatch, setDeletingBatch] = useState(false);
 
   const students = useMemo(() => {
     return allUsers
@@ -412,6 +436,46 @@ const TeacherStudentsView: React.FC<TeacherContextProps> = ({
       });
   }, [allUsers, stats, statusFilter, searchQuery, sortBy]);
 
+  // Parse batch lines into student items
+  const parsedBatchStudents = useMemo(() => {
+    if (!batchText.trim()) return [];
+    const lines = batchText
+      .split(/[\n,]+/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    const existingLoginIds = new Set(allUsers.map((u) => u.studentLoginId.toLowerCase()));
+    let nextIndex = 1;
+
+    // Find highest existing numeric suffix if prefix matches
+    allUsers.forEach((u) => {
+      const match = u.studentLoginId.match(/\d+$/);
+      if (match) {
+        const num = parseInt(match[0], 10);
+        if (num >= nextIndex) nextIndex = num + 1;
+      }
+    });
+
+    return lines.map((line, idx) => {
+      // Clean leading number like "1. 홍길동" or "1번 홍길동"
+      const cleanName = line.replace(/^\d+[\.\s번\-_]*/, '').trim();
+      const seq = nextIndex + idx;
+      let generatedId = `${batchPrefix}${seq < 10 ? '0' + seq : seq}`;
+      while (existingLoginIds.has(generatedId.toLowerCase())) {
+        nextIndex++;
+        generatedId = `${batchPrefix}${nextIndex < 10 ? '0' + nextIndex : nextIndex}`;
+      }
+      existingLoginIds.add(generatedId.toLowerCase());
+      const avatar = AVATAR_OPTIONS[(idx + 1) % 6].id;
+      return {
+        displayName: cleanName || `학생${idx + 1}`,
+        studentLoginId: generatedId,
+        avatarId: avatar,
+      };
+    });
+  }, [batchText, batchPrefix, allUsers]);
+
+  // Handle single student registration
   const handleCreateStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (creating) return;
@@ -488,6 +552,52 @@ const TeacherStudentsView: React.FC<TeacherContextProps> = ({
     }
   };
 
+  // Handle batch student registration
+  const handleBatchCreateSubmit = async () => {
+    if (parsedBatchStudents.length === 0 || batchCreating) return;
+    setBatchCreating(true);
+    try {
+      const res = await createStudentsBatch({
+        workspaceOwnerUid,
+        teacherUid: teacherProfile.uid,
+        teacherName: teacherProfile.displayName,
+        classId: teacherProfile.classId,
+        students: parsedBatchStudents,
+      });
+      onNotify(`학생 ${res.count}명의 계정이 일괄 등록되었습니다! (초기 비밀번호: 1234)`, 'success');
+      setBatchModalOpen(false);
+      setBatchText('');
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : '일괄 등록 오류', 'error');
+    } finally {
+      setBatchCreating(false);
+    }
+  };
+
+  // Handle instant password reset to 1234
+  const handleConfirmResetPassword = async () => {
+    if (!resetTargetStudent || resettingPw) return;
+    setResettingPw(true);
+    try {
+      await resetStudentPasswordTo1234({
+        workspaceOwnerUid,
+        teacherUid: teacherProfile.uid,
+        teacherName: teacherProfile.displayName,
+        student: resetTargetStudent,
+      });
+      onNotify(
+        `${resetTargetStudent.displayName} 학생의 비밀번호가 '1234'로 즉시 초기화되었습니다!`,
+        'success'
+      );
+      setResetTargetStudent(null);
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : '비밀번호 초기화 실패', 'error');
+    } finally {
+      setResettingPw(false);
+    }
+  };
+
+  // Toggle account active/inactive
   const handleToggleAccountStatus = async (stu: UserProfile) => {
     const nextStatus = stu.accountStatus === 'active' ? 'inactive' : 'active';
     const reason =
@@ -523,26 +633,48 @@ const TeacherStudentsView: React.FC<TeacherContextProps> = ({
     }
   };
 
-  const handleResetStudentPassword = async (stu: UserProfile) => {
+  // Toggle select all students in current view
+  const handleToggleSelectAll = () => {
+    if (selectedStudentUids.size === students.length && students.length > 0) {
+      setSelectedStudentUids(new Set());
+    } else {
+      setSelectedStudentUids(new Set(students.map((s) => s.uid)));
+    }
+  };
+
+  const handleToggleSelectStudent = (uid: string) => {
+    setSelectedStudentUids((prev) => {
+      const next = new Set(prev);
+      if (next.has(uid)) next.delete(uid);
+      else next.add(uid);
+      return next;
+    });
+  };
+
+  // Execute Batch Deletion
+  const handleExecuteBatchDelete = async () => {
+    if (deletingBatch) return;
+    setDeletingBatch(true);
     try {
-      const pwHash = await hashPassword('1234');
-      await updateDoc(doc(db, 'users', stu.uid), {
-        passwordHash: pwHash,
-        updatedAt: serverTimestamp(),
-      });
-      await recordAuditLog({
+      const targets = isDeletingAll
+        ? allUsers.filter((u) => u.role === 'student')
+        : allUsers.filter((u) => selectedStudentUids.has(u.uid) && u.role === 'student');
+
+      const res = await deleteStudentsBatch({
         workspaceOwnerUid,
-        actorUid: teacherProfile.uid,
-        actorName: teacherProfile.displayName,
-        action: 'PASSWORD_RESET',
-        targetType: 'user',
-        targetId: stu.uid,
-        reason: '학생 요청에 따른 초기 비밀번호(1234) 복구',
-        metadataSummary: `${stu.displayName} (${stu.studentLoginId}) 초기 비밀번호 복구`,
+        teacherUid: teacherProfile.uid,
+        teacherName: teacherProfile.displayName,
+        students: targets,
       });
-      onNotify(`${stu.displayName} 학생의 비밀번호가 초기값(1234)으로 복구되었습니다.`, 'success');
+
+      onNotify(`학생 ${res.count}명의 계정이 안전하게 삭제되었습니다.`, 'success');
+      setSelectedStudentUids(new Set());
+      setDeleteConfirmOpen(false);
+      setIsDeletingAll(false);
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `users/${stu.uid}`);
+      onNotify(err instanceof Error ? err.message : '학생 삭제 오류', 'error');
+    } finally {
+      setDeletingBatch(false);
     }
   };
 
@@ -568,198 +700,532 @@ const TeacherStudentsView: React.FC<TeacherContextProps> = ({
     }
   };
 
+  const isAllSelected = students.length > 0 && selectedStudentUids.size === students.length;
+
   return (
-    <div className="space-y-6">
-      <div>
-        <p className="text-xs font-semibold text-[#6B665E] mb-1">
-          학생 계정 생성 · 비활성화/복구 · 점수 원장 조정
-        </p>
-        <h1 className="text-2xl sm:text-3xl font-extrabold text-[#141413]">
-          우리 반 학생 계정 및 활동 관리
-        </h1>
+    <div className="space-y-6 w-full">
+      {/* View Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold text-[#6B665E] mb-1">
+            학생 계정 관리 · 1234 비밀번호 초기화 · 일괄 등록 및 일괄 삭제
+          </p>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-[#141413] tracking-tight">
+            우리 반 학생 명단 및 계정 관리
+          </h1>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setBatchModalOpen(true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-[#DDD5F8] text-[#3730A3] text-xs font-extrabold hover:bg-[#C9BFF3] cursor-pointer whitespace-nowrap shadow-xs"
+          >
+            <UploadCloud className="w-4 h-4" />
+            <span>📋 학생 일괄 등록</span>
+          </button>
+
+          {students.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                setIsDeletingAll(true);
+                setDeleteConfirmOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-rose-50 text-rose-700 text-xs font-bold hover:bg-rose-100 cursor-pointer whitespace-nowrap"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>전체 학생 일괄 삭제</span>
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Create New Student Form */}
-      <form
-        onSubmit={handleCreateStudent}
-        className="bg-[#E0F2FE] rounded-[28px] p-6 grid grid-cols-1 sm:grid-cols-4 gap-3 items-end"
-      >
-        <div>
-          <label className="block text-xs font-bold text-[#141413] mb-1">신규 학생 이름</label>
-          <input
-            type="text"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="예: 홍길동"
-            required
-            className="w-full rounded-xl bg-white px-3.5 py-2 text-xs text-[#141413]"
-          />
+      {/* Quick Add Single Student Form */}
+      <div className="bg-[#E0F2FE] rounded-[28px] p-5 sm:p-6 shadow-xs">
+        <div className="flex items-center gap-2 mb-3">
+          <UserPlus className="w-4 h-4 text-[#0369A1]" />
+          <h3 className="text-xs sm:text-sm font-extrabold text-[#0369A1]">
+            새로운 학생 1명 개별 등록
+          </h3>
         </div>
-        <div>
-          <label className="block text-xs font-bold text-[#141413] mb-1">
-            학생 발급 아이디 (영문/숫자)
-          </label>
-          <input
-            type="text"
-            value={newLoginId}
-            onChange={(e) => setNewLoginId(e.target.value)}
-            placeholder="예: shindong07"
-            required
-            className="w-full rounded-xl bg-white px-3.5 py-2 text-xs text-[#141413]"
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-bold text-[#141413] mb-1">초기 비밀번호</label>
-          <input
-            type="text"
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            required
-            className="w-full rounded-xl bg-white px-3.5 py-2 text-xs text-[#141413]"
-          />
-        </div>
-        <button
-          type="submit"
-          disabled={creating}
-          className="px-4 py-2.5 rounded-xl bg-[#141413] text-white text-xs font-bold cursor-pointer"
+        <form
+          onSubmit={handleCreateStudent}
+          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end"
         >
-          + 학생 계정 발급하기
-        </button>
-      </form>
+          <div>
+            <label className="block text-xs font-bold text-[#141413] mb-1">학생 이름</label>
+            <input
+              type="text"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="예: 김신동"
+              required
+              className="w-full rounded-xl bg-white px-3.5 py-2.5 text-xs text-[#141413] font-bold focus:outline-none focus:ring-2 focus:ring-[#141413]"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-[#141413] mb-1">
+              학생 발급 아이디 (영문/숫자)
+            </label>
+            <input
+              type="text"
+              value={newLoginId}
+              onChange={(e) => setNewLoginId(e.target.value)}
+              placeholder="예: shindong07"
+              required
+              className="w-full rounded-xl bg-white px-3.5 py-2.5 text-xs text-[#141413] font-bold focus:outline-none focus:ring-2 focus:ring-[#141413]"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-[#141413] mb-1">
+              초기 비밀번호 (기본: 1234)
+            </label>
+            <input
+              type="text"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              required
+              className="w-full rounded-xl bg-white px-3.5 py-2.5 text-xs text-[#141413] font-bold focus:outline-none focus:ring-2 focus:ring-[#141413]"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={creating}
+            className="w-full py-2.5 px-4 rounded-xl bg-[#141413] text-white text-xs font-extrabold hover:bg-[#2C2A27] cursor-pointer shadow-xs whitespace-nowrap"
+          >
+            {creating ? '등록 중...' : '+ 학생 계정 발급하기'}
+          </button>
+        </form>
+      </div>
 
-      {/* Search & Sort Controls */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="이름 또는 아이디 검색..."
-            className="rounded-xl bg-[#F3EFEA] px-3.5 py-2 text-xs text-[#141413]"
-          />
+      {/* Search & Sort Controls & Batch Action Bar */}
+      <div className="bg-[#F3EFEA] rounded-[24px] p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="relative min-w-[200px] flex-1 sm:flex-none">
+            <Search className="w-3.5 h-3.5 text-[#8C827A] absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="이름 또는 아이디 검색..."
+              className="w-full rounded-xl bg-white pl-8 pr-3 py-2 text-xs text-[#141413] font-bold focus:outline-none"
+            />
+          </div>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
-            className="rounded-xl bg-[#F3EFEA] px-3 py-2 text-xs font-bold text-[#141413]"
+            className="rounded-xl bg-white px-3 py-2 text-xs font-bold text-[#141413] focus:outline-none"
           >
             <option value="all">전체 상태</option>
             <option value="active">활성 계정만</option>
             <option value="inactive">비활성 계정만</option>
           </select>
+          <div className="flex items-center gap-1.5 text-xs text-[#6B665E]">
+            <span className="text-[11px]">정렬:</span>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+              className="rounded-xl bg-white px-2.5 py-2 text-xs font-bold text-[#141413] focus:outline-none"
+            >
+              <option value="name">이름순</option>
+              <option value="points">누적 점수순</option>
+              <option value="missions">완료 미션순</option>
+            </select>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-[#6B665E]">정렬:</span>
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
-            className="rounded-xl bg-[#F3EFEA] px-3 py-2 text-xs font-bold text-[#141413]"
-          >
-            <option value="name">이름순</option>
-            <option value="points">누적 점수순</option>
-            <option value="missions">완료 미션순</option>
-          </select>
-        </div>
+        {/* Selected Students Batch Actions Bar */}
+        {selectedStudentUids.size > 0 && (
+          <div className="flex items-center justify-between sm:justify-end gap-2 bg-[#F6D4D2] px-3.5 py-1.5 rounded-2xl animate-fade-in">
+            <span className="text-xs font-extrabold text-[#7F1D1D]">
+              {selectedStudentUids.size}명 선택됨
+            </span>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDeletingAll(false);
+                  setDeleteConfirmOpen(true);
+                }}
+                className="px-3 py-1.5 rounded-xl bg-rose-600 text-white text-xs font-extrabold hover:bg-rose-700 cursor-pointer shadow-xs whitespace-nowrap"
+              >
+                선택 학생 일괄 삭제
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedStudentUids(new Set())}
+                className="px-2 py-1.5 rounded-xl bg-white/70 text-xs font-bold text-[#141413] hover:bg-white cursor-pointer"
+              >
+                선택 해제
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Student Table */}
-      <div className="bg-[#F3EFEA] rounded-[28px] p-6 overflow-x-auto">
-        <table className="w-full text-left border-collapse min-w-[720px]">
-          <thead>
-            <tr className="border-b border-[#E2DDD3] text-xs text-[#6B665E]">
-              <th className="py-3 px-3">학생 (아이디)</th>
-              <th className="py-3 px-3">접속 상태</th>
-              <th className="py-3 px-3">누적 점수</th>
-              <th className="py-3 px-3">완료 미션 / 뱃지</th>
-              <th className="py-3 px-3">프로필 공개</th>
-              <th className="py-3 px-3 text-right">교사 관리 작업</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[#E2DDD3] text-xs">
-            {students.map((stu) => {
-              const st = stats.find((x) => x.studentUid === stu.uid);
-              const online = isUserCurrentlyOnline(stu);
-              return (
-                <tr key={stu.uid} className="bg-white/60">
-                  <td className="py-3.5 px-3">
-                    <div className="flex items-center gap-2.5">
-                      <AvatarIllustration avatarId={stu.avatarId} size="sm" />
-                      <div>
-                        <p className="font-extrabold text-[#141413]">{stu.displayName}</p>
-                        <p className="text-[11px] text-[#6B665E]">ID: {stu.studentLoginId}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="py-3.5 px-3">
-                    <span
-                      className={`font-bold ${
-                        stu.accountStatus === 'inactive'
-                          ? 'text-rose-600'
-                          : online
-                          ? 'text-emerald-700'
-                          : 'text-[#6B665E]'
-                      }`}
-                    >
-                      {stu.accountStatus === 'inactive'
-                        ? '비활성 계정'
-                        : online
-                        ? '실시간 접속 중'
-                        : '오프라인'}
-                    </span>
-                    <p className="text-[10px] text-[#787268] tabular-nums">
-                      로그인: {stu.lastLoginAt ? stu.lastLoginAt.slice(0, 10) : '-'}
-                    </p>
-                  </td>
-                  <td className="py-3.5 px-3 font-extrabold text-[#141413] tabular-nums">
-                    {st?.totalPoints ?? 0}점
-                  </td>
-                  <td className="py-3.5 px-3 tabular-nums text-[#3D3A35]">
-                    미션 {st?.completedMissionCount ?? 0}회 · 뱃지 {st?.earnedBadgeCount ?? 0}개
-                  </td>
-                  <td className="py-3.5 px-3 text-[#5C574F]">
-                    {stu.profileVisibility === 'private'
-                      ? '나만 보기'
-                      : stu.profileVisibility === 'manitto'
-                      ? '마니또 공개'
-                      : '학급 공개'}
-                  </td>
-                  <td className="py-3.5 px-3 text-right space-x-1.5">
+      {/* Student List Table & Mobile Cards */}
+      <div className="bg-[#F3EFEA] rounded-[28px] p-4 sm:p-6 overflow-hidden shadow-xs">
+        {students.length === 0 ? (
+          <div className="text-center py-12 space-y-3">
+            <div className="w-12 h-12 rounded-2xl bg-[#E6E1D6] flex items-center justify-center mx-auto text-xl">
+              👥
+            </div>
+            <p className="text-sm font-bold text-[#141413]">등록된 학생 계정이 없습니다.</p>
+            <p className="text-xs text-[#6B665E]">
+              상단의 개별 등록 폼 또는 [학생 일괄 등록] 버튼으로 명단을 추가해 보세요.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto w-full">
+            <table className="w-full text-left border-collapse min-w-[760px]">
+              <thead>
+                <tr className="border-b border-[#E2DDD3] text-xs font-extrabold text-[#6B665E]">
+                  <th className="py-3 px-3 w-10 text-center">
                     <button
-                      onClick={() => setAdjustingStudent(stu)}
-                      className="px-2.5 py-1.5 rounded-lg bg-[#FBE3C8] text-[#141413] font-bold cursor-pointer"
+                      type="button"
+                      onClick={handleToggleSelectAll}
+                      className="cursor-pointer text-[#141413] hover:opacity-80"
+                      title={isAllSelected ? '전체 해제' : '전체 선택'}
                     >
-                      점수 조정
+                      {isAllSelected ? (
+                        <CheckSquare className="w-4 h-4 text-[#141413]" />
+                      ) : (
+                        <Square className="w-4 h-4 text-[#8C827A]" />
+                      )}
                     </button>
-                    <button
-                      onClick={() => handleResetStudentPassword(stu)}
-                      className="px-2.5 py-1.5 rounded-lg bg-white text-[#141413] font-bold cursor-pointer"
-                    >
-                      비밀번호 복구
-                    </button>
-                    <button
-                      onClick={() => handleToggleAccountStatus(stu)}
-                      className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer ${
-                        stu.accountStatus === 'active'
-                          ? 'bg-rose-100 text-rose-700'
-                          : 'bg-emerald-100 text-emerald-800'
-                      }`}
-                    >
-                      {stu.accountStatus === 'active' ? '비활성화' : '계정 복구'}
-                    </button>
-                  </td>
+                  </th>
+                  <th className="py-3 px-3">학생 (아이디)</th>
+                  <th className="py-3 px-3">접속 상태</th>
+                  <th className="py-3 px-3">누적 점수</th>
+                  <th className="py-3 px-3">미션 / 뱃지</th>
+                  <th className="py-3 px-3">프로필 공개</th>
+                  <th className="py-3 px-3 text-right">관리 작업</th>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              </thead>
+              <tbody className="divide-y divide-[#E2DDD3] text-xs">
+                {students.map((stu) => {
+                  const st = stats.find((x) => x.studentUid === stu.uid);
+                  const online = isUserCurrentlyOnline(stu);
+                  const isSelected = selectedStudentUids.has(stu.uid);
+
+                  return (
+                    <tr
+                      key={stu.uid}
+                      className={`transition-colors ${
+                        isSelected ? 'bg-[#FBE3C8]/40' : 'bg-white/60 hover:bg-white/90'
+                      }`}
+                    >
+                      <td className="py-3.5 px-3 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => handleToggleSelectStudent(stu.uid)}
+                          className="w-4 h-4 rounded cursor-pointer accent-[#141413]"
+                        />
+                      </td>
+                      <td className="py-3.5 px-3">
+                        <div className="flex items-center gap-2.5">
+                          <AvatarIllustration avatarId={stu.avatarId} size="sm" />
+                          <div className="min-w-0">
+                            <p className="font-extrabold text-[#141413] truncate">
+                              {stu.displayName}
+                            </p>
+                            <p className="text-[11px] text-[#6B665E] font-mono">
+                              ID: {stu.studentLoginId}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-3">
+                        <span
+                          className={`font-bold inline-flex items-center gap-1 ${
+                            stu.accountStatus === 'inactive'
+                              ? 'text-rose-600'
+                              : online
+                              ? 'text-emerald-700'
+                              : 'text-[#6B665E]'
+                          }`}
+                        >
+                          {online && <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />}
+                          {stu.accountStatus === 'inactive'
+                            ? '비활성 계정'
+                            : online
+                            ? '실시간 접속 중'
+                            : '오프라인'}
+                        </span>
+                        <p className="text-[10px] text-[#787268] tabular-nums mt-0.5">
+                          {stu.lastLoginAt ? stu.lastLoginAt.slice(0, 10) : '접속 기록 없음'}
+                        </p>
+                      </td>
+                      <td className="py-3.5 px-3 font-extrabold text-[#141413] tabular-nums text-sm">
+                        {st?.totalPoints ?? 0}점
+                      </td>
+                      <td className="py-3.5 px-3 tabular-nums text-[#3D3A35] font-semibold">
+                        미션 {st?.completedMissionCount ?? 0}회 · 뱃지 {st?.earnedBadgeCount ?? 0}개
+                      </td>
+                      <td className="py-3.5 px-3 text-[#5C574F] whitespace-nowrap">
+                        {stu.profileVisibility === 'private'
+                          ? '🔒 나만 보기'
+                          : stu.profileVisibility === 'manitto'
+                          ? '💌 마니또 공개'
+                          : '🏫 학급 전체 공개'}
+                      </td>
+                      <td className="py-3.5 px-3 text-right">
+                        <div className="inline-flex items-center gap-1.5 flex-wrap justify-end">
+                          {/* 1234 Password Reset Button (Explicit Requirement) */}
+                          <button
+                            type="button"
+                            onClick={() => setResetTargetStudent(stu)}
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#C6F0DF] text-[#065F46] font-extrabold hover:bg-[#A7E5CC] cursor-pointer whitespace-nowrap shadow-xs"
+                            title="비밀번호를 초기 비밀번호 1234로 즉시 초기화"
+                          >
+                            <KeyRound className="w-3.5 h-3.5" />
+                            <span>1234로 초기화</span>
+                          </button>
+
+                          {/* Adjust Score */}
+                          <button
+                            type="button"
+                            onClick={() => setAdjustingStudent(stu)}
+                            className="px-2.5 py-1.5 rounded-xl bg-[#FBE3C8] text-[#141413] font-extrabold hover:bg-[#F8D2AB] cursor-pointer whitespace-nowrap shadow-xs"
+                          >
+                            점수 조정
+                          </button>
+
+                          {/* Toggle Active Status */}
+                          <button
+                            type="button"
+                            onClick={() => handleToggleAccountStatus(stu)}
+                            className={`px-2.5 py-1.5 rounded-xl font-bold cursor-pointer whitespace-nowrap shadow-xs ${
+                              stu.accountStatus === 'active'
+                                ? 'bg-rose-100 text-rose-700 hover:bg-rose-200'
+                                : 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                            }`}
+                          >
+                            {stu.accountStatus === 'active' ? '비활성화' : '계정 복구'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
+
+      {/* =========================================================================
+       * MODAL 1: Password Reset to '1234' Confirmation Modal
+       * ======================================================================= */}
+      {resetTargetStudent && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-[#FBF9F5] rounded-[32px] max-w-md w-full p-6 space-y-4 shadow-xl border border-white">
+            <div className="w-12 h-12 rounded-2xl bg-[#C6F0DF] flex items-center justify-center text-2xl mx-auto">
+              🔑
+            </div>
+            <div className="text-center space-y-1">
+              <h3 className="text-lg font-extrabold text-[#141413]">
+                {resetTargetStudent.displayName} 학생 비밀번호 초기화
+              </h3>
+              <p className="text-xs text-[#5C574F] leading-relaxed">
+                비밀번호를 초기 비밀번호인 <strong className="text-[#065F46] font-extrabold">1234</strong> 로 즉시 초기화하시겠습니까?
+              </p>
+            </div>
+
+            <div className="bg-[#F3EFEA] rounded-2xl p-3.5 text-xs text-[#4A463F] space-y-1">
+              <p>• 학생 아이디: <strong>{resetTargetStudent.studentLoginId}</strong></p>
+              <p>• 초기화 후 학생이 <span className="font-bold text-rose-600">1234</span>로 로그인하여 자신의 새 비밀번호로 다시 바꿀 수 있습니다.</p>
+              <p>• 이 조치는 감사 로그에 영구 기록됩니다.</p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                disabled={resettingPw}
+                onClick={() => setResetTargetStudent(null)}
+                className="flex-1 py-2.5 rounded-xl bg-[#EFECE6] text-xs font-bold text-[#4A463F] cursor-pointer hover:bg-[#E2DDD3]"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                disabled={resettingPw}
+                onClick={handleConfirmResetPassword}
+                className="flex-1 py-2.5 rounded-xl bg-[#065F46] text-white text-xs font-extrabold cursor-pointer hover:bg-[#044E39] shadow-xs"
+              >
+                {resettingPw ? '초기화 중...' : '1234로 즉시 초기화'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+       * MODAL 2: Batch Student Registration Modal
+       * ======================================================================= */}
+      {batchModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-[#FBF9F5] rounded-[32px] max-w-2xl w-full p-6 sm:p-8 space-y-5 shadow-2xl max-h-[90vh] overflow-y-auto border border-white">
+            <div className="flex items-center justify-between pb-3 border-b border-[#E2DDD3]">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-[#DDD5F8] flex items-center justify-center text-xl">
+                  📋
+                </div>
+                <div>
+                  <h3 className="text-lg font-extrabold text-[#141413]">
+                    학생 일괄 등록
+                  </h3>
+                  <p className="text-xs text-[#6B665E]">
+                    우리 반 학생 명단을 복사하여 붙여넣으면 계정이 한 번에 발급됩니다.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBatchModalOpen(false)}
+                className="w-8 h-8 rounded-full bg-[#EFECE6] flex items-center justify-center text-sm font-bold cursor-pointer hover:bg-[#E2DDD3]"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-extrabold text-[#141413] mb-1.5">
+                  1. 아이디 영문 접두사 (자동 번호가 부여됩니다)
+                </label>
+                <input
+                  type="text"
+                  value={batchPrefix}
+                  onChange={(e) => setBatchPrefix(e.target.value.trim().toLowerCase())}
+                  placeholder="예: shindong"
+                  className="w-full sm:w-60 rounded-xl bg-[#F3EFEA] px-3.5 py-2 text-xs text-[#141413] font-bold focus:outline-none focus:ring-2 focus:ring-[#141413]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-extrabold text-[#141413] mb-1.5">
+                  2. 학생 이름 목록 붙여넣기 (한 줄에 한 명 또는 쉼표 구분)
+                </label>
+                <textarea
+                  value={batchText}
+                  onChange={(e) => setBatchText(e.target.value)}
+                  rows={6}
+                  placeholder={`예시:\n김민수\n이영희\n박철수\n최도윤\n정지우\n1번 강시우`}
+                  className="w-full rounded-2xl bg-[#F3EFEA] p-4 text-xs font-mono text-[#141413] focus:outline-none focus:ring-2 focus:ring-[#141413]"
+                />
+              </div>
+
+              {/* Parsed Preview Table */}
+              {parsedBatchStudents.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs font-bold text-[#141413]">
+                    <span>인식된 학생 명단: 총 {parsedBatchStudents.length}명</span>
+                    <span className="text-[11px] text-[#065F46] font-semibold">초기 비밀번호: 1234 자동 적용</span>
+                  </div>
+                  <div className="max-h-48 overflow-y-auto bg-white rounded-2xl border border-[#E2DDD3] p-3 divide-y divide-[#EFECE6]">
+                    {parsedBatchStudents.map((s, idx) => (
+                      <div key={idx} className="py-1.5 flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-2">
+                          <span className="w-6 text-[10px] text-[#8C827A] tabular-nums font-bold">
+                            {idx + 1}.
+                          </span>
+                          <span className="font-extrabold text-[#141413]">{s.displayName}</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="font-mono text-[11px] text-[#6B665E]">ID: {s.studentLoginId}</span>
+                          <span className="text-[10px] bg-[#E2F2EA] text-[#065F46] px-2 py-0.5 rounded-lg font-bold">PW: 1234</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#E2DDD3]">
+              <button
+                type="button"
+                disabled={batchCreating}
+                onClick={() => setBatchModalOpen(false)}
+                className="px-4 py-2.5 rounded-xl bg-[#EFECE6] text-xs font-bold text-[#4A463F] cursor-pointer hover:bg-[#E2DDD3]"
+              >
+                닫기
+              </button>
+              <button
+                type="button"
+                disabled={parsedBatchStudents.length === 0 || batchCreating}
+                onClick={handleBatchCreateSubmit}
+                className="px-5 py-2.5 rounded-xl bg-[#141413] text-white text-xs font-extrabold hover:bg-[#2C2A27] cursor-pointer disabled:opacity-50 shadow-xs"
+              >
+                {batchCreating
+                  ? '일괄 등록 처리 중...'
+                  : `총 ${parsedBatchStudents.length}명 학생 계정 일괄 등록하기 →`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+       * MODAL 3: Batch Deletion Confirmation Modal
+       * ======================================================================= */}
+      {deleteConfirmOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-[#FBF9F5] rounded-[32px] max-w-md w-full p-6 space-y-4 shadow-xl border border-rose-200">
+            <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center text-2xl mx-auto">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <div className="text-center space-y-1">
+              <h3 className="text-lg font-extrabold text-[#141413]">
+                {isDeletingAll ? '전체 학생 계정 일괄 삭제' : '선택한 학생 계정 일괄 삭제'}
+              </h3>
+              <p className="text-xs text-rose-700 font-bold leading-relaxed">
+                {isDeletingAll
+                  ? `학급의 모든 학생(${students.length}명) 계정을 완전히 삭제하시겠습니까?`
+                  : `선택한 ${selectedStudentUids.size}명의 학생 계정을 완전히 삭제하시겠습니까?`}
+              </p>
+            </div>
+
+            <div className="bg-rose-50 border border-rose-200 rounded-2xl p-3.5 text-xs text-rose-800 space-y-1">
+              <p className="font-extrabold">• 경고: 이 작업은 되돌릴 수 없습니다.</p>
+              <p>• 해당 학생들의 미션 실천 기록, 점수, 획득 뱃지 데이터가 함께 정리됩니다.</p>
+              <p>• 교사 관리자 계정은 삭제되지 않고 안전하게 유지됩니다.</p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                disabled={deletingBatch}
+                onClick={() => {
+                  setDeleteConfirmOpen(false);
+                  setIsDeletingAll(false);
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-[#EFECE6] text-xs font-bold text-[#4A463F] cursor-pointer hover:bg-[#E2DDD3]"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                disabled={deletingBatch}
+                onClick={handleExecuteBatchDelete}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 text-white text-xs font-extrabold cursor-pointer hover:bg-rose-700 shadow-xs"
+              >
+                {deletingBatch ? '삭제 중...' : '확인, 영구 삭제 실행'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Score Adjustment Modal */}
       {adjustingStudent && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
           <form
             onSubmit={handleScoreAdjustmentSubmit}
-            className="bg-[#FBF9F5] rounded-[28px] max-w-md w-full p-6 space-y-4"
+            className="bg-[#FBF9F5] rounded-[28px] max-w-md w-full p-6 space-y-4 shadow-xl border border-white"
           >
             <h3 className="text-lg font-extrabold text-[#141413]">
               {adjustingStudent.displayName} 학생 점수 조정
@@ -776,7 +1242,7 @@ const TeacherStudentsView: React.FC<TeacherContextProps> = ({
                 value={pointsDelta}
                 onChange={(e) => setPointsDelta(Number(e.target.value))}
                 required
-                className="w-full rounded-xl bg-white border border-[#E2DDD3] px-3.5 py-2 text-sm tabular-nums"
+                className="w-full rounded-xl bg-white border border-[#E2DDD3] px-3.5 py-2 text-sm tabular-nums font-bold"
               />
             </div>
             <div>
@@ -796,13 +1262,13 @@ const TeacherStudentsView: React.FC<TeacherContextProps> = ({
               <button
                 type="button"
                 onClick={() => setAdjustingStudent(null)}
-                className="px-4 py-2 rounded-xl bg-[#EFECE6] text-xs font-bold cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-[#EFECE6] text-xs font-bold cursor-pointer hover:bg-[#E2DDD3]"
               >
                 취소
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 rounded-xl bg-[#141413] text-white text-xs font-bold cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-[#141413] text-white text-xs font-bold cursor-pointer hover:bg-[#2C2A27]"
               >
                 원장 반영 및 저장
               </button>

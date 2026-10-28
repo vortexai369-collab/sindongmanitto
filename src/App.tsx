@@ -60,6 +60,12 @@ import {
   hashPassword,
   recordAuditLog,
 } from './services/manittoServerEngine';
+import {
+  getInitialUsers,
+  getInitialMissions,
+  getInitialBadges,
+  getInitialAssignments,
+} from './data/seedData';
 import { AvatarIllustration } from './components/AvatarIllustration';
 import { StudentViews } from './components/StudentViews';
 import { TeacherViews } from './components/TeacherViews';
@@ -130,28 +136,88 @@ export default function App() {
     }, 4000);
   };
 
+  // Watchdog & Loading State
+  const [loadingSeconds, setLoadingSeconds] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const runWorkspaceInit = async () => {
+    setSeeding(true);
+    setLoadError(null);
+    try {
+      const timeoutPromise = new Promise<void>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('데이터베이스 응답 시간이 6초를 초과했습니다.')),
+          6000
+        )
+      );
+      await Promise.race([ensureWorkspaceSeeded(WORKSPACE_ID), timeoutPromise]);
+    } catch (err) {
+      console.error('Seed/Init error:', err);
+      setLoadError(err instanceof Error ? err.message : '초기화 실패');
+    } finally {
+      setSeeding(false);
+    }
+  };
+
   // 1. Seed Initial Classroom Data in Cloud Firestore on Boot (No Google Popup needed)
   useEffect(() => {
-    let mounted = true;
-    async function initWorkspace() {
-      try {
-        await ensureWorkspaceSeeded(WORKSPACE_ID);
-      } catch (err) {
-        console.error('Seed error:', err);
-      } finally {
-        if (mounted) setSeeding(false);
-      }
-    }
-    initWorkspace();
-    return () => {
-      mounted = false;
-    };
+    runWorkspaceInit();
   }, []);
 
-  // 2. Real-time Firestore Listeners (Scoped strictly by workspaceOwnerUid == WORKSPACE_ID)
+  // Timer to detect slow network or hanging database connection
   useEffect(() => {
-    if (seeding) return;
+    if (allUsers.length > 0) return;
+    const interval = setInterval(() => {
+      setLoadingSeconds((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [allUsers.length]);
 
+  // Offline or instant preview fallback mode if Firestore connection is slow
+  const handleLoadSampleDataFallback = () => {
+    const prefix = WORKSPACE_ID.slice(0, 8);
+    const initialUsers = getInitialUsers(WORKSPACE_ID).map((u) => {
+      const uId = `${prefix}_${u.uid}`;
+      return {
+        ...u,
+        uid: uId,
+        createdAt: null as any,
+        updatedAt: null as any,
+      };
+    });
+    setAllUsers(initialUsers);
+    setMissions(
+      getInitialMissions(WORKSPACE_ID).map((m) => ({
+        ...m,
+        missionId: `${prefix}_${m.missionId}`,
+        createdAt: null as any,
+        updatedAt: null as any,
+      }))
+    );
+    setBadges(
+      getInitialBadges(WORKSPACE_ID).map((b) => ({
+        ...b,
+        badgeId: `${prefix}_${b.badgeId}`,
+        createdAt: null as any,
+        updatedAt: null as any,
+      }))
+    );
+    setAssignments(
+      getInitialAssignments(WORKSPACE_ID).map((a) => ({
+        ...a,
+        assignmentId: `${prefix}_${a.assignmentId}`,
+        giverUid: `${prefix}_${a.giverUid}`,
+        receiverUid: `${prefix}_${a.receiverUid}`,
+        createdAt: null as any,
+        updatedAt: null as any,
+      }))
+    );
+    setSeeding(false);
+    showToast('체험용 학급 명단 데이터로 즉시 전환되었습니다.', 'info');
+  };
+
+  // 2. Real-time Firestore Listeners (Start immediately on mount so users load right away)
+  useEffect(() => {
     const unsubs: Array<() => void> = [];
 
     const subscribeCol = <T,>(
@@ -192,12 +258,12 @@ export default function App() {
     return () => {
       unsubs.forEach((fn) => fn());
     };
-  }, [seeding]);
+  }, []);
 
   // 3. Subscribe to Lounge Participants subcollection for the active lounge session
   const currentLoungeSession = loungeSessions[0] || null;
   useEffect(() => {
-    if (seeding || !currentLoungeSession) return;
+    if (!currentLoungeSession) return;
     const subPath = `loungeSessions/${currentLoungeSession.sessionId}/participants`;
     const q = query(
       collection(db, 'loungeSessions', currentLoungeSession.sessionId, 'participants'),
@@ -211,7 +277,7 @@ export default function App() {
       (err) => handleFirestoreError(err, OperationType.LIST, subPath)
     );
     return () => unsub();
-  }, [seeding, currentLoungeSession?.sessionId]);
+  }, [currentLoungeSession?.sessionId]);
 
   // Roster of Students registered by the Teacher
   const rosterStudents = useMemo(
@@ -430,18 +496,55 @@ export default function App() {
     }
   };
 
-  // Loading Screen
-  if (seeding || allUsers.length === 0) {
+  // Loading Screen (Safe against infinite loading, with watchdog timer & retry & instant sample fallback)
+  if (allUsers.length === 0) {
     return (
-      <div className="min-h-screen bg-[#E2F2EA] flex items-center justify-center p-6">
-        <div className="bg-[#FBF9F5] rounded-[36px] p-10 max-w-md w-full text-center shadow-sm space-y-4">
-          <div className="w-14 h-14 rounded-2xl bg-[#C6F0DF] flex items-center justify-center mx-auto text-2xl">
+      <div className="min-h-screen bg-[#E2F2EA] flex items-center justify-center p-4 sm:p-6">
+        <div className="bg-[#FBF9F5] rounded-[36px] p-6 sm:p-10 max-w-lg w-full text-center shadow-lg border border-white space-y-4 break-keep">
+          <div className="w-16 h-16 rounded-2xl bg-[#C6F0DF] flex items-center justify-center mx-auto text-3xl shadow-xs">
             🌱
           </div>
-          <h1 className="text-xl font-extrabold text-[#141413]">전주신동초 마니또</h1>
-          <p className="text-xs text-[#6B665E]">
-            우리 반 명단과 마니또 활동 데이터를 불러오고 있어요...
-          </p>
+          <h1 className="text-xl sm:text-2xl font-extrabold text-[#141413] tracking-tight">
+            전주신동초 마니또
+          </h1>
+
+          <div className="space-y-1.5">
+            <p className="text-xs sm:text-sm font-bold text-[#141413]">
+              {loadingSeconds < 3
+                ? '우리 반 명단과 마니또 활동 데이터를 불러오고 있어요...'
+                : loadingSeconds < 6
+                ? '데이터베이스 연결 및 초기 학급 명단을 확인하고 있습니다...'
+                : '데이터베이스 연결에 지연이 발생하고 있습니다.'}
+            </p>
+            <p className="text-[11px] text-[#6B665E]">
+              전주신동초 5학년 2반 마니또 워크스페이스 실시간 동기화 중 ({loadingSeconds}초 경과)
+            </p>
+          </div>
+
+          {loadError && (
+            <div className="bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl p-3 text-xs text-left">
+              <p className="font-extrabold mb-0.5">안내:</p>
+              <p className="leading-relaxed">{loadError}</p>
+            </div>
+          )}
+
+          {/* Action Buttons to Prevent Getting Stuck */}
+          <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-2.5">
+            <button
+              type="button"
+              onClick={runWorkspaceInit}
+              className="w-full sm:w-auto px-5 py-3 rounded-2xl bg-[#141413] text-white text-xs font-extrabold hover:bg-[#2C2A27] cursor-pointer shadow-xs"
+            >
+              🌱 초기 명단 생성 및 다시 시도
+            </button>
+            <button
+              type="button"
+              onClick={handleLoadSampleDataFallback}
+              className="w-full sm:w-auto px-4 py-3 rounded-2xl bg-[#DDD5F8] text-[#3730A3] text-xs font-extrabold hover:bg-[#C9BFF3] cursor-pointer shadow-xs"
+            >
+              ⚡ 체험 모드로 즉시 열기
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -456,15 +559,15 @@ export default function App() {
     );
 
     return (
-      <div className="min-h-screen bg-[#E2F2EA] flex items-center justify-center p-4 sm:p-8">
-        <div className="bg-[#FBF9F5] rounded-[40px] max-w-5xl w-full p-6 sm:p-10 shadow-sm grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+      <div className="min-h-screen bg-[#E2F2EA] flex items-center justify-center p-3 sm:p-6 lg:p-8">
+        <div className="bg-[#FBF9F5] rounded-[36px] sm:rounded-[44px] max-w-6xl w-full p-5 sm:p-8 lg:p-10 shadow-sm grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start border border-white break-keep">
           {/* Left Intro Column */}
-          <div className="lg:col-span-5 space-y-5 lg:sticky lg:top-8">
+          <div className="lg:col-span-5 space-y-4 lg:sticky lg:top-8">
             <div className="inline-flex items-center gap-2 bg-[#F3EFEA] rounded-2xl px-3.5 py-2 text-xs font-bold text-[#141413]">
               <span>🏫 전주신동초등학교 5학년 2반</span>
             </div>
 
-            <h1 className="text-3xl sm:text-4xl font-extrabold text-[#141413] tracking-tight leading-tight">
+            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-[#141413] tracking-tight leading-snug">
               나의 따뜻한 행동이
               <br />
               우리 반을 바꿔요!
@@ -738,17 +841,17 @@ export default function App() {
   ];
 
   return (
-    <div className="min-h-screen bg-[#E2F2EA] p-2 sm:p-4 lg:p-6">
-      {/* Main Outer App Container */}
-      <div className="max-w-[1440px] mx-auto bg-[#FBF9F5] rounded-[36px] shadow-xs border border-white/80 p-4 sm:p-6">
+    <div className="min-h-screen bg-[#E2F2EA] p-2 sm:p-4 lg:p-6 xl:p-8 break-keep">
+      {/* Main Outer App Container: Uses full window comfortably up to 1800px wide */}
+      <div className="w-full max-w-[1800px] mx-auto bg-[#FBF9F5] rounded-[28px] sm:rounded-[40px] shadow-sm border border-white p-3.5 sm:p-6 lg:p-7 min-h-[calc(100vh-1rem)] sm:min-h-[calc(100vh-2rem)] flex flex-col">
         {/* Top Bar (3-Zone Contract: Brand Wordmark — Logged-in User Info — Password Change & Logout Actions) */}
-        <header className="flex items-center justify-between gap-4 pb-4 mb-5 border-b border-[#EFECE6]">
+        <header className="flex flex-wrap items-center justify-between gap-3 pb-4 mb-5 border-b border-[#EFECE6]">
           {/* Zone 1: Brand Wordmark */}
           <div className="flex items-center gap-2.5 shrink-0">
-            <div className="w-9 h-9 rounded-xl bg-[#141413] text-white flex items-center justify-center font-extrabold text-sm">
+            <div className="w-9 h-9 rounded-xl bg-[#141413] text-white flex items-center justify-center font-extrabold text-sm shadow-xs">
               신
             </div>
-            <span className="text-base sm:text-lg font-extrabold tracking-tight text-[#141413] whitespace-nowrap shrink-0">
+            <span className="text-base sm:text-lg font-extrabold tracking-tight text-[#141413] whitespace-nowrap">
               전주신동초 마니또
             </span>
           </div>
@@ -773,18 +876,20 @@ export default function App() {
             </button>
 
             <button
+              type="button"
               onClick={() => setRightPanelOpen((v) => !v)}
-              className="hidden xl:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#F3EFEA] text-xs font-bold text-[#141413] hover:bg-[#E7E2D8] cursor-pointer whitespace-nowrap shrink-0"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#F3EFEA] text-xs font-bold text-[#141413] hover:bg-[#E7E2D8] cursor-pointer whitespace-nowrap shrink-0 shadow-xs"
+              title={rightPanelOpen ? '우측 요약 패널 접기' : '우측 요약 패널 열기'}
             >
               {rightPanelOpen ? (
                 <>
                   <PanelRightClose className="w-3.5 h-3.5" />
-                  <span>우측 요약 접기</span>
+                  <span className="hidden sm:inline">우측 요약 접기</span>
                 </>
               ) : (
                 <>
                   <PanelRightOpen className="w-3.5 h-3.5" />
-                  <span>우측 요약 열기</span>
+                  <span className="hidden sm:inline">우측 요약 열기</span>
                 </>
               )}
             </button>

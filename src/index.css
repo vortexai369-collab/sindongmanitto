@@ -1,6 +1,10 @@
 @import "tailwindcss";
 
 @layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+
   body {
     font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Pretendard', 'Noto Sans KR', sans-serif;
     background-color: #E2F2EA;
@@ -8,6 +12,13 @@
     margin: 0;
     padding: 0;
     -webkit-font-smoothing: antialiased;
+    word-break: keep-all;
+    overflow-wrap: break-word;
+  }
+
+  h1, h2, h3, h4, h5, h6, p, span, button, a, label, input, textarea, select {
+    word-break: keep-all;
+    overflow-wrap: break-word;
   }
 
   .tabular-nums {
