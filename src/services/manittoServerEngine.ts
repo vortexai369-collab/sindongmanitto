@@ -6,6 +6,7 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
+  writeBatch,
   query,
   where,
   runTransaction,
@@ -1123,6 +1124,16 @@ export async function updateClassroomInfo(params: {
   });
 }
 
+export function normalizeClassId(workspaceOwnerUid: string, rawClassId?: string): string {
+  const prefix = workspaceOwnerUid.slice(0, 8);
+  if (!rawClassId) return `class_${prefix}_5_2`;
+  const trimmed = rawClassId.trim();
+  if (/^[a-zA-Z0-9_-]{1,128}$/.test(trimmed)) {
+    return trimmed;
+  }
+  return `class_${prefix}_5_2`;
+}
+
 /**
  * Updates teacher profile name, avatar, bio, and classroom name
  */
@@ -1145,7 +1156,7 @@ export async function updateTeacherProfile(params: {
     updatedAt: serverTimestamp(),
   };
   if (classId) {
-    userUpdates.classId = sanitizeText(classId, 40);
+    userUpdates.classId = normalizeClassId(workspaceOwnerUid, classId);
   }
 
   await updateDoc(doc(db, 'users', teacherUid), userUpdates);
@@ -1160,20 +1171,26 @@ export async function updateTeacherProfile(params: {
     });
   }
 
-  await recordAuditLog({
-    workspaceOwnerUid,
-    actorUid: teacherUid,
-    actorName: displayName,
-    action: 'TEACHER_PROFILE_UPDATED',
-    targetType: 'user',
-    targetId: teacherUid,
-    reason: '교사 관리자 프로필 정보(이름, 소개, 아바타, 학급 정보) 수정',
-    metadataSummary: `displayName: ${displayName}, avatarId: ${avatarId}, className: ${className || ''}, schoolName: ${schoolName || ''}`,
-  });
+  try {
+    await recordAuditLog({
+      workspaceOwnerUid,
+      actorUid: teacherUid,
+      actorName: displayName,
+      action: 'TEACHER_PROFILE_UPDATED',
+      targetType: 'user',
+      targetId: teacherUid,
+      reason: '교사 관리자 프로필 정보(이름, 소개, 아바타, 학급 정보) 수정',
+      metadataSummary: `displayName: ${displayName}, avatarId: ${avatarId}, className: ${className || ''}, schoolName: ${schoolName || ''}`,
+    });
+  } catch (err) {
+    console.error('프로필 수정 감사 로그 기록 실패:', err);
+  }
 }
 
 /**
  * Regenerates circular derangement assignments for ALL active students in the classroom
+ * Uses chunked WriteBatch (<= 450 ops per batch, well under Firestore's 500-op limit)
+ * with automatic rollback if any batch chunk fails.
  */
 export async function generateFullClassroomAssignments(params: {
   workspaceOwnerUid: string;
@@ -1190,70 +1207,164 @@ export async function generateFullClassroomAssignments(params: {
   const prefix = workspaceOwnerUid.slice(0, 8);
   const startsAt = new Date().toISOString().slice(0, 10);
   const endsAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const scopedClassId = normalizeClassId(workspaceOwnerUid, classId);
 
-  // 1. Delete all old assignments and their letter threads
+  // 1. Fetch old assignments and letter threads for this workspace so we can replace them and rollback if needed
   const [oldAssignSnap, oldThreadSnap] = await Promise.all([
     getDocs(query(collection(db, 'manittoAssignments'), where('workspaceOwnerUid', '==', workspaceOwnerUid))),
     getDocs(query(collection(db, 'letterThreads'), where('workspaceOwnerUid', '==', workspaceOwnerUid))),
   ]);
 
-  await Promise.all([
-    ...oldAssignSnap.docs.map((d) => deleteDoc(doc(db, 'manittoAssignments', d.id))),
-    ...oldThreadSnap.docs.map((d) => deleteDoc(doc(db, 'letterThreads', d.id))),
-  ]);
+  const backupAssignments = oldAssignSnap.docs.map((d) => ({ id: d.id, data: d.data() }));
+  const backupThreads = oldThreadSnap.docs.map((d) => ({ id: d.id, data: d.data() }));
 
-  // 2. Circular derangement: shuffle all active students
+  // 2. Circular derangement: shuffle all active students so no one is assigned to themselves
   const shuffled = [...activeStudents].sort(() => Math.random() - 0.5);
 
-  const createPromises = shuffled.map(async (giver, idx) => {
+  // 3. Build operations and segment into chunks of <= 450 writes (under Firestore's 500-write batch limit)
+  const MAX_BATCH_SIZE = 450;
+  type BatchOp = {
+    apply: (b: ReturnType<typeof writeBatch>) => void;
+    createdAssignId?: string;
+    createdThreadId?: string;
+  };
+  const operations: BatchOp[] = [];
+
+  // Queue new assignment & thread creations first, then old doc deletions
+  const nowToken = Date.now().toString(36);
+  shuffled.forEach((giver, idx) => {
     const receiver = shuffled[(idx + 1) % shuffled.length];
-    const assignId = `${prefix}_assign_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`;
-    const threadId = `${prefix}_thread_${assignId.slice(-10)}`;
+    const randSuffix = Math.random().toString(36).slice(2, 6);
+    const assignId = `${prefix}_assign_${nowToken}_${idx}_${randSuffix}`;
+    const threadId = `${prefix}_thread_${nowToken}_${idx}_${randSuffix}`;
 
-    const aPromise = setDoc(doc(db, 'manittoAssignments', assignId), {
-      assignmentId: assignId,
-      workspaceOwnerUid,
-      classId,
-      giverUid: giver.uid,
-      receiverUid: receiver.uid,
-      active: true,
-      startsAt,
-      endsAt,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
+    operations.push({
+      createdAssignId: assignId,
+      apply: (b) =>
+        b.set(doc(db, 'manittoAssignments', assignId), {
+          assignmentId: assignId,
+          workspaceOwnerUid,
+          classId: scopedClassId,
+          giverUid: giver.uid,
+          receiverUid: receiver.uid,
+          active: true,
+          startsAt,
+          endsAt,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        }),
     });
 
-    const tPromise = setDoc(doc(db, 'letterThreads', threadId), {
-      threadId,
-      workspaceOwnerUid,
-      classId,
-      assignmentId: assignId,
-      participantUids: [giver.uid, receiverUidSafe(receiver.uid)],
-      lastMessageAt: new Date().toISOString(),
-      status: 'active',
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
+    operations.push({
+      createdThreadId: threadId,
+      apply: (b) =>
+        b.set(doc(db, 'letterThreads', threadId), {
+          threadId,
+          workspaceOwnerUid,
+          classId: scopedClassId,
+          assignmentId: assignId,
+          participantUids: [giver.uid, receiver.uid],
+          lastMessageAt: new Date().toISOString(),
+          status: 'active',
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        }),
     });
-
-    return Promise.all([aPromise, tPromise]);
   });
 
-  function receiverUidSafe(uid: string) {
-    return uid;
+  // Queue old doc deletions
+  oldAssignSnap.docs.forEach((d) => {
+    operations.push({
+      apply: (b) => b.delete(doc(db, 'manittoAssignments', d.id)),
+    });
+  });
+  oldThreadSnap.docs.forEach((d) => {
+    operations.push({
+      apply: (b) => b.delete(doc(db, 'letterThreads', d.id)),
+    });
+  });
+
+  // Segment into chunks of MAX_BATCH_SIZE
+  const chunks: BatchOp[][] = [];
+  for (let i = 0; i < operations.length; i += MAX_BATCH_SIZE) {
+    chunks.push(operations.slice(i, i + MAX_BATCH_SIZE));
   }
 
-  await Promise.all(createPromises);
+  const committedAssignIds: string[] = [];
+  const committedThreadIds: string[] = [];
 
-  await recordAuditLog({
-    workspaceOwnerUid,
-    actorUid: teacherUid,
-    actorName: teacherName,
-    action: 'FULL_MANITTO_REGENERATED',
-    targetType: 'manittoAssignments',
-    targetId: `${activeStudents.length}_students`,
-    reason: `교사에 의한 전체 학생 ${activeStudents.length}명 순환 마니또 배정 생성`,
-    metadataSummary: `총 ${activeStudents.length}명 전원 1:1 순환 배정 완료`,
-  });
+  try {
+    for (const chunk of chunks) {
+      const batch = writeBatch(db);
+      for (const op of chunk) {
+        op.apply(batch);
+      }
+      await batch.commit();
+      for (const op of chunk) {
+        if (op.createdAssignId) committedAssignIds.push(op.createdAssignId);
+        if (op.createdThreadId) committedThreadIds.push(op.createdThreadId);
+      }
+    }
+  } catch (batchError) {
+    // Rollback partially committed chunks if multi-batch process fails midway
+    try {
+      const rollbackBatch = writeBatch(db);
+      let rollbackCount = 0;
+      for (const aId of committedAssignIds) {
+        if (rollbackCount < MAX_BATCH_SIZE) {
+          rollbackBatch.delete(doc(db, 'manittoAssignments', aId));
+          rollbackCount++;
+        }
+      }
+      for (const tId of committedThreadIds) {
+        if (rollbackCount < MAX_BATCH_SIZE) {
+          rollbackBatch.delete(doc(db, 'letterThreads', tId));
+          rollbackCount++;
+        }
+      }
+      for (const oldA of backupAssignments) {
+        if (rollbackCount < MAX_BATCH_SIZE) {
+          rollbackBatch.set(doc(db, 'manittoAssignments', oldA.id), {
+            ...oldA.data,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          rollbackCount++;
+        }
+      }
+      for (const oldT of backupThreads) {
+        if (rollbackCount < MAX_BATCH_SIZE) {
+          rollbackBatch.set(doc(db, 'letterThreads', oldT.id), {
+            ...oldT.data,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          rollbackCount++;
+        }
+      }
+      if (rollbackCount > 0) {
+        await rollbackBatch.commit();
+      }
+    } catch (rollbackErr) {
+      console.error('마니또 배정 롤백 중 오류 발생:', rollbackErr);
+    }
+    throw batchError;
+  }
+
+  try {
+    await recordAuditLog({
+      workspaceOwnerUid,
+      actorUid: teacherUid,
+      actorName: teacherName,
+      action: 'FULL_MANITTO_REGENERATED',
+      targetType: 'manittoAssignments',
+      targetId: `${activeStudents.length}_students`,
+      reason: `교사에 의한 전체 학생 ${activeStudents.length}명 순환 마니또 배정 생성`,
+      metadataSummary: `총 ${activeStudents.length}명 전원 1:1 순환 배정 완료`,
+    });
+  } catch (err) {
+    console.error('마니또 배정 감사 기록 저장 실패 (배정은 정상 완료됨):', err);
+  }
 
   return { count: activeStudents.length };
 }

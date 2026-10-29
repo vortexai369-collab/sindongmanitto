@@ -12,6 +12,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidClassId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128;
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -59,7 +63,7 @@ service cloud.firestore {
       data.studentLoginId is string && data.studentLoginId.size() >= 1 && data.studentLoginId.size() <= 64 &&
       data.passwordHash is string && data.passwordHash.size() >= 1 && data.passwordHash.size() <= 128 &&
       data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
-      data.classId is string && data.classId.size() >= 1 && data.classId.size() <= 128 &&
+      isValidClassId(data.classId) &&
       data.avatarId is string && data.avatarId.size() >= 1 && data.avatarId.size() <= 40 &&
       data.bio is string && data.bio.size() <= 300 &&
       isStringList(data.interests, 10) &&
@@ -79,7 +83,7 @@ service cloud.firestore {
     function isValidClassRoom(data) {
       return data.keys().hasAll(['classId', 'workspaceOwnerUid', 'name', 'schoolName', 'teacherUids', 'active', 'createdAt', 'updatedAt']) &&
         data.keys().hasOnly(['classId', 'workspaceOwnerUid', 'name', 'schoolName', 'teacherUids', 'active', 'createdAt', 'updatedAt']) &&
-        isValidId(data.classId) &&
+        isValidClassId(data.classId) &&
         isAuthorizedWorkspace(data.workspaceOwnerUid) &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
         data.schoolName is string && data.schoolName.size() >= 1 && data.schoolName.size() <= 80 &&
@@ -94,7 +98,7 @@ service cloud.firestore {
         data.keys().hasOnly(['assignmentId', 'workspaceOwnerUid', 'classId', 'giverUid', 'receiverUid', 'active', 'startsAt', 'endsAt', 'createdAt', 'updatedAt']) &&
         isValidId(data.assignmentId) &&
         isAuthorizedWorkspace(data.workspaceOwnerUid) &&
-        isValidId(data.classId) &&
+        isValidClassId(data.classId) &&
         isValidId(data.giverUid) &&
         isValidId(data.receiverUid) &&
         data.active is bool &&
@@ -150,7 +154,7 @@ service cloud.firestore {
       isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       isValidId(data.missionId) &&
       isValidId(data.studentUid) &&
-      isValidId(data.classId) &&
+      isValidClassId(data.classId) &&
       data.actionDescription is string && data.actionDescription.size() >= 1 && data.actionDescription.size() <= 500 &&
       data.reflection is string && data.reflection.size() >= 1 && data.reflection.size() <= 500 &&
       data.activityDate is string && data.activityDate.size() >= 8 && data.activityDate.size() <= 20 &&
@@ -178,7 +182,7 @@ service cloud.firestore {
       isValidId(data.ledgerId) &&
       isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       isValidId(data.studentUid) &&
-      isValidId(data.classId) &&
+      isValidClassId(data.classId) &&
       data.sourceType is string && (data.sourceType == 'mission' || data.sourceType == 'adjustment' || data.sourceType == 'reversal') &&
       data.sourceId is string && data.sourceId.size() <= 128 &&
       data.pointsDelta is number && data.pointsDelta >= -500 && data.pointsDelta <= 500 &&
@@ -201,7 +205,7 @@ service cloud.firestore {
       ]) &&
       isValidId(data.studentUid) &&
       isAuthorizedWorkspace(data.workspaceOwnerUid) &&
-      isValidId(data.classId) &&
+      isValidClassId(data.classId) &&
       data.totalPoints is number && data.totalPoints >= 0 && data.totalPoints <= 10000 &&
       data.completedMissionCount is number && data.completedMissionCount >= 0 && data.completedMissionCount <= 500 &&
       data.earnedBadgeCount is number && data.earnedBadgeCount >= 0 && data.earnedBadgeCount <= 50 &&
@@ -243,7 +247,7 @@ service cloud.firestore {
       isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       isValidId(data.studentUid) &&
       isValidId(data.badgeId) &&
-      isValidId(data.classId) &&
+      isValidClassId(data.classId) &&
       data.awardedAt is string && data.awardedAt.size() <= 40 &&
       data.criteriaSnapshot is string && data.criteriaSnapshot.size() <= 200 &&
       data.createdAt is timestamp &&
@@ -261,7 +265,7 @@ service cloud.firestore {
       ]) &&
       isValidId(data.threadId) &&
       isAuthorizedWorkspace(data.workspaceOwnerUid) &&
-      isValidId(data.classId) &&
+      isValidClassId(data.classId) &&
       isValidId(data.assignmentId) &&
       isStringList(data.participantUids, 2) &&
       data.lastMessageAt is string && data.lastMessageAt.size() <= 40 &&
@@ -284,7 +288,7 @@ service cloud.firestore {
       isValidId(data.letterId) &&
       isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       isValidId(data.threadId) &&
-      isValidId(data.classId) &&
+      isValidClassId(data.classId) &&
       isValidId(data.senderUid) &&
       isValidId(data.receiverUid) &&
       data.senderDirection is string && (data.senderDirection == 'from_manitto' || data.senderDirection == 'to_manitto') &&
@@ -310,7 +314,7 @@ service cloud.firestore {
       ]) &&
       isValidId(data.sessionId) &&
       isAuthorizedWorkspace(data.workspaceOwnerUid) &&
-      isValidId(data.classId) &&
+      isValidClassId(data.classId) &&
       data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
       data.noticeRules is string && data.noticeRules.size() <= 400 &&
       data.scheduledDate is string && data.scheduledDate.size() <= 20 &&
@@ -362,7 +366,7 @@ service cloud.firestore {
       isValidId(data.messageId) &&
       isAuthorizedWorkspace(data.workspaceOwnerUid) &&
       isValidId(data.sessionId) &&
-      isValidId(data.classId) &&
+      isValidClassId(data.classId) &&
       isValidId(data.senderUid) &&
       data.anonymousAlias is string && data.anonymousAlias.size() >= 1 && data.anonymousAlias.size() <= 40 &&
       data.body is string && data.body.size() >= 1 && data.body.size() <= 400 &&
@@ -386,7 +390,7 @@ service cloud.firestore {
       ]) &&
       isValidId(data.reportId) &&
       isAuthorizedWorkspace(data.workspaceOwnerUid) &&
-      isValidId(data.classId) &&
+      isValidClassId(data.classId) &&
       isValidId(data.reporterUid) &&
       data.targetType is string && (data.targetType == 'letter' || data.targetType == 'loungeMessage' || data.targetType == 'mission') &&
       isValidId(data.targetId) &&
@@ -468,10 +472,10 @@ service cloud.firestore {
     }
 
     match /classes/{classId} {
-      allow get: if isValidId(classId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
+      allow get: if isValidClassId(classId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
-      allow create: if isValidId(classId) && isValidClassRoom(incoming()) && incoming().classId == classId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isValidId(classId) && isValidClassRoom(incoming()) &&
+      allow create: if isValidClassId(classId) && isValidClassRoom(incoming()) && incoming().classId == classId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidClassId(classId) && isValidClassRoom(incoming()) &&
         incoming().classId == existing().classId &&
         incoming().workspaceOwnerUid == existing().workspaceOwnerUid &&
         (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time) &&

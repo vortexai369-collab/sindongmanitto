@@ -40,7 +40,7 @@ import {
   Line,
   Legend,
 } from 'recharts';
-import { doc, setDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, updateDoc, deleteDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import {
   UserProfile,
@@ -81,6 +81,7 @@ import {
   updateTeacherProfile,
   updateClassroomInfo,
   generateFullClassroomAssignments,
+  normalizeClassId,
 } from '../services/manittoServerEngine';
 
 interface TeacherContextProps {
@@ -2914,16 +2915,6 @@ const TeacherAssignmentsView: React.FC<TeacherContextProps> = ({
         classId: teacherProfile.classId || '5-2',
         activeStudents,
       });
-      await recordAuditLog({
-        workspaceOwnerUid,
-        actorUid: teacherProfile.uid,
-        actorName: teacherProfile.displayName,
-        action: 'MANITTO_RESHUFFLED',
-        targetType: 'manittoAssignments',
-        targetId: teacherProfile.classId,
-        reason: '교사에 의한 학급 전체 마니또 순환 자동 재배정',
-        metadataSummary: `활성 학생 ${activeStudents.length}명 전원 100% 마니또 순환 배정 완료`,
-      });
 
       onNotify(
         `우리 반 학생 ${activeStudents.length}명 전원의 마니또가 겹치지 않게 순환 재배정되었습니다! 🎉`,
@@ -2961,13 +2952,21 @@ const TeacherAssignmentsView: React.FC<TeacherContextProps> = ({
 
       const existing = assignments.find((a) => a.giverUid === modalGiverUid);
       const prefix = workspaceOwnerUid.slice(0, 8);
-      const assignmentId = existing?.assignmentId || `${prefix}_assign_${modalGiverUid}_${Date.now().toString(36)}`;
-      const threadId = `${prefix}_thread_${assignmentId.slice(-10)}`;
-      const scopedClassId = teacherProfile.classId || `class_${prefix}_5_2`;
+      const randSuffix = Math.random().toString(36).slice(2, 6);
+      const nowToken = Date.now().toString(36);
+      const assignmentId = `${prefix}_assign_${nowToken}_m_${randSuffix}`;
+      const threadId = `${prefix}_thread_${nowToken}_m_${randSuffix}`;
+      const scopedClassId = normalizeClassId(workspaceOwnerUid, teacherProfile.classId);
       const startsAt = existing?.startsAt || new Date().toISOString().slice(0, 10);
       const endsAt = existing?.endsAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
-      await setDoc(doc(db, 'manittoAssignments', assignmentId), {
+      const batch = writeBatch(db);
+
+      if (existing?.assignmentId) {
+        batch.delete(doc(db, 'manittoAssignments', existing.assignmentId));
+      }
+
+      batch.set(doc(db, 'manittoAssignments', assignmentId), {
         assignmentId,
         workspaceOwnerUid,
         classId: scopedClassId,
@@ -2980,32 +2979,34 @@ const TeacherAssignmentsView: React.FC<TeacherContextProps> = ({
         updatedAt: serverTimestamp(),
       });
 
-      await setDoc(
-        doc(db, 'letterThreads', threadId),
-        {
-          threadId,
-          workspaceOwnerUid,
-          classId: scopedClassId,
-          assignmentId,
-          participantUids: [modalGiverUid, modalReceiverUid],
-          lastMessageAt: new Date().toISOString(),
-          status: 'active',
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
-
-      await recordAuditLog({
+      batch.set(doc(db, 'letterThreads', threadId), {
+        threadId,
         workspaceOwnerUid,
-        actorUid: teacherProfile.uid,
-        actorName: teacherProfile.displayName,
-        action: 'MANITTO_MANUAL_ASSIGNED',
-        targetType: 'manittoAssignment',
-        targetId: assignmentId,
-        reason: '교사에 의한 마니또 짝 수동 설정 및 변경',
-        metadataSummary: `${giverStudent?.displayName || modalGiverUid} -> ${receiverStudent?.displayName || modalReceiverUid}`,
+        classId: scopedClassId,
+        assignmentId,
+        participantUids: [modalGiverUid, modalReceiverUid],
+        lastMessageAt: new Date().toISOString(),
+        status: 'active',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
+
+      await batch.commit();
+
+      try {
+        await recordAuditLog({
+          workspaceOwnerUid,
+          actorUid: teacherProfile.uid,
+          actorName: teacherProfile.displayName,
+          action: 'MANITTO_MANUAL_ASSIGNED',
+          targetType: 'manittoAssignment',
+          targetId: assignmentId,
+          reason: '교사에 의한 마니또 짝 수동 설정 및 변경',
+          metadataSummary: `${giverStudent?.displayName || modalGiverUid} -> ${receiverStudent?.displayName || modalReceiverUid}`,
+        });
+      } catch (logErr) {
+        console.error('Audit log failed:', logErr);
+      }
 
       onNotify(
         `${giverStudent?.displayName} 학생의 마니또 대상이 ${receiverStudent?.displayName}(으)로 수동 설정되었습니다.`,
@@ -4144,7 +4145,7 @@ const TeacherSettingsAndAuditView: React.FC<TeacherContextProps> = ({
         displayName: profileDisplayName.trim(),
         avatarId: profileAvatarId,
         bio: profileBio.trim(),
-        classId: settingsClassName.trim(),
+        classId: normalizeClassId(workspaceOwnerUid, currentClass?.classId || teacherProfile.classId),
         className: settingsClassName.trim(),
         schoolName: settingsSchoolName.trim() || '전주신동초등학교',
       });
