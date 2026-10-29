@@ -2229,6 +2229,7 @@ const StudentLoungeView: React.FC<StudentContextProps> = ({
       );
 
       try {
+        const currentPresenceStatus = loungeSession.status === 'active' ? 'active' : 'waiting';
         if (!myParticipant) {
           const usedAliases = new Set(loungeParticipants.map((p) => p.anonymousAlias));
           const unusedAliases = ANONYMOUS_ALIASES.filter((a) => !usedAliases.has(a));
@@ -2242,7 +2243,7 @@ const StudentLoungeView: React.FC<StudentContextProps> = ({
             workspaceOwnerUid,
             sessionId: loungeSession.sessionId,
             anonymousAlias: assignedAlias,
-            presenceStatus: 'active',
+            presenceStatus: currentPresenceStatus,
             aliasChangeCount: 0,
             joinedAt: nowIso,
             lastHeartbeatAt: nowIso,
@@ -2252,7 +2253,7 @@ const StudentLoungeView: React.FC<StudentContextProps> = ({
           });
         } else {
           await updateDoc(partRef, {
-            presenceStatus: 'active',
+            presenceStatus: currentPresenceStatus,
             lastHeartbeatAt: nowIso,
             updatedAt: serverTimestamp(),
           });
@@ -2272,8 +2273,19 @@ const StudentLoungeView: React.FC<StudentContextProps> = ({
     return () => {
       isMounted = false;
       clearInterval(interval);
+      const partRef = doc(
+        db,
+        'loungeSessions',
+        loungeSession.sessionId,
+        'participants',
+        currentStudent.uid
+      );
+      updateDoc(partRef, {
+        presenceStatus: 'left',
+        updatedAt: serverTimestamp(),
+      }).catch(() => {});
     };
-  }, [loungeSession?.sessionId, currentStudent.uid]);
+  }, [loungeSession?.sessionId, loungeSession?.status, currentStudent.uid]);
 
   // Real-time logged-in viewers currently watching/in the lounge (active within last 3 mins)
   const liveLoungeViewers = useMemo(() => {

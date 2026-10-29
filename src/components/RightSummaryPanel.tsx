@@ -104,8 +104,28 @@ export const RightSummaryPanel: React.FC<RightSummaryPanelProps> = ({
     }));
   }, [badges, activeUser.uid, missions, submissions, sentLettersCount, badgeAwards]);
 
-  const waitingCount = loungeParticipants.filter((p) => p.presenceStatus === 'waiting').length;
-  const activeCount = loungeParticipants.filter((p) => p.presenceStatus === 'active').length;
+  const [liveClock, setLiveClock] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const timer = setInterval(() => setLiveClock(Date.now()), 5000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const liveLoungeParticipants = useMemo(() => {
+    return loungeParticipants.filter((p) => {
+      if (p.presenceStatus === 'left') return false;
+      if (!p.lastHeartbeatAt) return false;
+      const diffMs = liveClock - new Date(p.lastHeartbeatAt).getTime();
+      return diffMs <= 2 * 60 * 1000;
+    });
+  }, [loungeParticipants, liveClock]);
+
+  const isLoungeActive = loungeSession?.status === 'active';
+  const waitingCount = liveLoungeParticipants.filter(
+    (p) => p.presenceStatus === 'waiting' || !isLoungeActive
+  ).length;
+  const activeCount = isLoungeActive
+    ? liveLoungeParticipants.filter((p) => p.presenceStatus === 'active').length
+    : 0;
 
   // Stacked pastel columns for the Activity card (matching reference image visual)
   const stackedColumns = [

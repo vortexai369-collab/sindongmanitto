@@ -667,7 +667,8 @@ service cloud.firestore {
       allow get: if isValidId(logId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow list: if isAuthorizedWorkspace(existing().workspaceOwnerUid);
       allow create: if isValidId(logId) && isValidAuditLog(incoming()) && incoming().logId == logId && incoming().createdAt == request.time;
-      allow update, delete: if false;
+      allow update: if false;
+      allow delete: if isValidId(logId) && isAuthorizedWorkspace(existing().workspaceOwnerUid);
     }
 
     match /appSettings/{settingId} {

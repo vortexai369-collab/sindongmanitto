@@ -1403,6 +1403,53 @@ export async function recordAuditLog(params: {
 }
 
 /**
+ * Deletes an audit log entry
+ */
+export async function deleteAuditLog(logId: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'auditLogs', logId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `auditLogs/${logId}`);
+  }
+}
+
+/**
+ * Deletes all audit logs for a workspace atomically using writeBatch directly on Firestore server
+ */
+export async function deleteAllAuditLogs(workspaceOwnerUid: string): Promise<number> {
+  try {
+    const q = query(
+      collection(db, 'auditLogs'),
+      where('workspaceOwnerUid', '==', workspaceOwnerUid)
+    );
+    const snap = await getDocs(q);
+    if (snap.empty) return 0;
+
+    const MAX_BATCH = 450;
+    let batch = writeBatch(db);
+    let count = 0;
+    let totalDeleted = 0;
+
+    for (const d of snap.docs) {
+      batch.delete(doc(db, 'auditLogs', d.id));
+      count++;
+      totalDeleted++;
+      if (count >= MAX_BATCH) {
+        await batch.commit();
+        batch = writeBatch(db);
+        count = 0;
+      }
+    }
+    if (count > 0) {
+      await batch.commit();
+    }
+    return totalDeleted;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, 'auditLogs');
+  }
+}
+
+/**
  * Evaluates all 5 badge criteria for a student and awards any newly unlocked badges
  */
 export async function evaluateAndAwardBadges(params: {

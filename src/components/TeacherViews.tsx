@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Users,
   CheckCircle2,
@@ -82,6 +82,8 @@ import {
   updateClassroomInfo,
   generateFullClassroomAssignments,
   normalizeClassId,
+  deleteAuditLog,
+  deleteAllAuditLogs,
 } from '../services/manittoServerEngine';
 
 interface TeacherContextProps {
@@ -343,19 +345,27 @@ const TeacherDashboardOverview: React.FC<TeacherContextProps> = ({
   badges,
   badgeAwards,
   letters,
+  loungeSession,
   loungeParticipants,
   reports,
   onNavigate,
   onNotify,
 }) => {
   const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [liveClock, setLiveClock] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setLiveClock(Date.now()), 5000);
+    return () => clearInterval(timer);
+  }, []);
+
   const students = useMemo(
     () => allUsers.filter((u) => u.role === 'student'),
     [allUsers]
   );
   const onlineStudents = useMemo(
     () => students.filter((s) => s.accountStatus === 'active' && isUserCurrentlyOnline(s)),
-    [students]
+    [students, liveClock]
   );
 
   const todayStr = new Date().toISOString().slice(0, 10);
@@ -369,8 +379,23 @@ const TeacherDashboardOverview: React.FC<TeacherContextProps> = ({
     .reduce((acc, cur) => acc + cur.pointsDelta, 0);
 
   const pendingReports = reports.filter((r) => r.status === 'pending');
-  const waitingCount = loungeParticipants.filter((p) => p.presenceStatus === 'waiting').length;
-  const activeCount = loungeParticipants.filter((p) => p.presenceStatus === 'active').length;
+
+  const liveLoungeParticipants = useMemo(() => {
+    return loungeParticipants.filter((p) => {
+      if (p.presenceStatus === 'left') return false;
+      if (!p.lastHeartbeatAt) return false;
+      const diffMs = liveClock - new Date(p.lastHeartbeatAt).getTime();
+      return diffMs <= 2 * 60 * 1000;
+    });
+  }, [loungeParticipants, liveClock]);
+
+  const isLoungeActive = loungeSession?.status === 'active';
+  const waitingCount = liveLoungeParticipants.filter(
+    (p) => p.presenceStatus === 'waiting' || !isLoungeActive
+  ).length;
+  const activeCount = isLoungeActive
+    ? liveLoungeParticipants.filter((p) => p.presenceStatus === 'active').length
+    : 0;
 
   const handleQuickReview = async (
     sub: MissionSubmission,
@@ -3456,7 +3481,7 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
   // Initialize or Open lounge session if none exists
   const handleInitLoungeSession = async () => {
     try {
-      const newSession: LoungeSession = {
+      await setDoc(doc(db, 'loungeSessions', sessionId), {
         sessionId,
         workspaceOwnerUid,
         classId: teacherProfile.classId || '5-2',
@@ -3469,10 +3494,9 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
         participantCount: 0,
         createdBy: teacherProfile.uid,
         noticeRules: noticeRules || '친구의 장점을 칭찬하고 서로를 응원하는 고운 말을 사용해요.',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      await setDoc(doc(db, 'loungeSessions', sessionId), newSession);
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
       onNotify('익명 학급 라운지가 즉시 개설되고 [자유 대화 진행 중] 상태로 전환되었습니다!', 'success');
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'loungeSessions');
@@ -3482,22 +3506,14 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
   const handleUpdateSchedule = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await setDoc(
-        doc(db, 'loungeSessions', sessionId),
-        {
-          sessionId,
-          workspaceOwnerUid,
-          classId: teacherProfile.classId || '5-2',
-          title: sanitizeText(title, 120),
-          scheduledDate,
-          startsAt,
-          endsAt,
-          noticeRules: sanitizeText(noticeRules, 400),
-          status: currentStatus,
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
+      await updateDoc(doc(db, 'loungeSessions', sessionId), {
+        title: sanitizeText(title, 120),
+        scheduledDate,
+        startsAt,
+        endsAt,
+        noticeRules: sanitizeText(noticeRules, 400),
+        updatedAt: serverTimestamp(),
+      });
       onNotify('라운지 운영 일정과 공지 규칙이 저장되었습니다.', 'success');
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, 'loungeSessions');
@@ -3506,22 +3522,10 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
 
   const handleSetStatus = async (status: LoungeSession['status']) => {
     try {
-      await setDoc(
-        doc(db, 'loungeSessions', sessionId),
-        {
-          sessionId,
-          workspaceOwnerUid,
-          classId: teacherProfile.classId || '5-2',
-          title: title || '5학년 2반 따뜻한 칭찬 라운지',
-          scheduledDate,
-          startsAt,
-          endsAt,
-          noticeRules,
-          status,
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
+      await updateDoc(doc(db, 'loungeSessions', sessionId), {
+        status,
+        updatedAt: serverTimestamp(),
+      });
       await recordAuditLog({
         workspaceOwnerUid,
         actorUid: teacherProfile.uid,
@@ -3610,9 +3614,12 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
 
     setBatchDeletingMsgs(true);
     try {
+      const batch = writeBatch(db);
       for (const msg of loungeMessages) {
-        await deleteDoc(doc(db, 'loungeMessages', msg.messageId));
+        batch.delete(doc(db, 'loungeMessages', msg.messageId));
       }
+      await batch.commit();
+
       await recordAuditLog({
         workspaceOwnerUid,
         actorUid: teacherProfile.uid,
@@ -3920,6 +3927,7 @@ const TeacherLoungeView: React.FC<TeacherContextProps> = ({
  * 8. TEACHER CLASSROOM ANALYTICS & STATS VIEW
  * ========================================================================== */
 const TeacherStatsView: React.FC<TeacherContextProps> = ({
+  currentClass,
   allUsers,
   missions,
   submissions,
@@ -3927,18 +3935,46 @@ const TeacherStatsView: React.FC<TeacherContextProps> = ({
   badges,
   badgeAwards,
 }) => {
-  const students = allUsers.filter((u) => u.role === 'student');
+  const [sortBy, setSortBy] = useState<'id' | 'points' | 'missions'>('id');
+
+  const students = useMemo(() => {
+    return allUsers
+      .filter((u) => u.role === 'student')
+      .sort((a, b) => a.studentLoginId.localeCompare(b.studentLoginId));
+  }, [allUsers]);
 
   const studentChartData = useMemo(() => {
-    return students.map((stu) => {
+    const data = students.map((stu) => {
       const st = stats.find((x) => x.studentUid === stu.uid);
+      const studentSubs = submissions.filter(
+        (s) => s.studentUid === stu.uid && s.status === 'approved'
+      );
+      const calculatedPoints =
+        st?.totalPoints ??
+        studentSubs.reduce((acc, cur) => acc + (cur.awardedPoints || 0), 0);
+      const calculatedMissions = st?.completedMissionCount ?? studentSubs.length;
+      const studentBadgesCount = badgeAwards.filter((a) => a.studentUid === stu.uid).length;
+
       return {
+        uid: stu.uid,
         name: stu.displayName,
-        점수: st?.totalPoints ?? 0,
-        완료미션수: st?.completedMissionCount ?? 0,
+        loginId: stu.studentLoginId,
+        avatarId: stu.avatarId,
+        점수: calculatedPoints,
+        완료미션수: calculatedMissions,
+        획득뱃지수: studentBadgesCount,
+        status: stu.accountStatus,
       };
     });
-  }, [students, stats]);
+
+    if (sortBy === 'points') {
+      return [...data].sort((a, b) => b.점수 - a.점수);
+    }
+    if (sortBy === 'missions') {
+      return [...data].sort((a, b) => b.완료미션수 - a.완료미션수);
+    }
+    return data;
+  }, [students, stats, submissions, badgeAwards, sortBy]);
 
   const badgeDistribution = useMemo(() => {
     return badges.map((b) => ({
@@ -3947,52 +3983,222 @@ const TeacherStatsView: React.FC<TeacherContextProps> = ({
     }));
   }, [badges, badgeAwards]);
 
+  const chartMinWidth = Math.max(520, studentChartData.length * 52);
+
   return (
     <div className="space-y-6">
-      <div>
-        <p className="text-xs font-semibold text-[#6B665E] mb-1">
-          학급 전체 활동 추이 · 미션 참여율 · 뱃지 획득 현황 (비경쟁 성장 통계)
-        </p>
-        <h1 className="text-2xl sm:text-3xl font-extrabold text-[#141413]">
-          5학년 2반 학급 친절 성장 통계
-        </h1>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <div className="bg-[#F3EFEA] rounded-[28px] p-6">
-          <h2 className="text-base font-bold text-[#141413] mb-3">
-            학생별 누적 친절 점수 및 완료 미션 현황
-          </h2>
-          <div className="h-64 bg-white rounded-2xl p-4">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={studentChartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#EFECE6" />
-                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Bar dataKey="점수" fill="#10B981" radius={[8, 8, 0, 0]} />
-                <Bar dataKey="완료미션수" fill="#818CF8" radius={[8, 8, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold text-[#6B665E] mb-1">
+            {currentClass?.schoolName || '전주신동초등학교'} {currentClass?.name || '5학년 2반'} 학급 친절 활동 및 성장 통계
+          </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-[#141413]">
+              우리 반 마니또 친절 성장 통계
+            </h1>
+            <span className="px-3 py-1 rounded-full bg-[#C6F0DF] text-[#065F46] text-xs font-extrabold">
+              전체 학생 {students.length}명 전원 집계
+            </span>
           </div>
         </div>
 
-        <div className="bg-[#F3EFEA] rounded-[28px] p-6">
-          <h2 className="text-base font-bold text-[#141413] mb-3">
-            마니또 뱃지 5종 학급 획득 현황
-          </h2>
-          <div className="h-64 bg-white rounded-2xl p-4">
+        {/* Sort Controls */}
+        <div className="flex items-center gap-1.5 bg-[#F3EFEA] p-1.5 rounded-2xl border border-[#E2DDD3]">
+          <span className="text-[11px] font-bold text-[#6B665E] px-2">정렬 기준:</span>
+          <button
+            type="button"
+            onClick={() => setSortBy('id')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+              sortBy === 'id'
+                ? 'bg-[#141413] text-white shadow-xs'
+                : 'text-[#4A463F] hover:bg-white'
+            }`}
+          >
+            기본 번호순
+          </button>
+          <button
+            type="button"
+            onClick={() => setSortBy('points')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+              sortBy === 'points'
+                ? 'bg-[#141413] text-white shadow-xs'
+                : 'text-[#4A463F] hover:bg-white'
+            }`}
+          >
+            점수 높은 순
+          </button>
+          <button
+            type="button"
+            onClick={() => setSortBy('missions')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+              sortBy === 'missions'
+                ? 'bg-[#141413] text-white shadow-xs'
+                : 'text-[#4A463F] hover:bg-white'
+            }`}
+          >
+            미션 많은 순
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Main Chart: Student Scores & Completed Missions */}
+        <div className="bg-[#F3EFEA] rounded-[28px] p-6 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-base font-extrabold text-[#141413]">
+                학생별 누적 친절 점수 및 완료 미션 현황 (전원 표시)
+              </h2>
+              <p className="text-xs text-[#6B665E] mt-0.5">
+                학생 수가 많을 경우 좌우로 부드럽게 스크롤하여 전체 학생을 확인할 수 있습니다.
+              </p>
+            </div>
+            <span className="text-xs font-bold text-[#065F46] bg-white px-2.5 py-1 rounded-xl shadow-xs">
+              {studentChartData.length}명
+            </span>
+          </div>
+
+          <div className="bg-white rounded-2xl p-4 overflow-x-auto">
+            <div style={{ minWidth: `${chartMinWidth}px`, height: '320px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={studentChartData}
+                  margin={{ top: 20, right: 20, left: 0, bottom: 25 }}
+                  barCategoryGap="20%"
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#EFECE6" />
+                  <XAxis
+                    dataKey="name"
+                    interval={0}
+                    angle={studentChartData.length > 6 ? -35 : 0}
+                    textAnchor={studentChartData.length > 6 ? 'end' : 'middle'}
+                    height={studentChartData.length > 6 ? 55 : 30}
+                    tick={{ fontSize: 11, fill: '#141413', fontWeight: 600 }}
+                  />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip
+                    content={({ active, payload }) => {
+                      if (active && payload && payload.length) {
+                        const d = payload[0].payload;
+                        return (
+                          <div className="bg-[#141413] text-white p-3 rounded-xl shadow-xl text-xs space-y-1">
+                            <p className="font-extrabold text-sm">{d.name} ({d.loginId})</p>
+                            <p className="text-emerald-400 font-bold">✨ 누적 점수: {d.점수}점</p>
+                            <p className="text-indigo-300">🎯 완료 미션: {d.완료미션수}회</p>
+                            <p className="text-amber-300">🏅 획득 뱃지: {d.획득뱃지수}개</p>
+                          </div>
+                        );
+                      }
+                      return null;
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 12, paddingTop: '10px' }} />
+                  <Bar dataKey="점수" fill="#10B981" radius={[8, 8, 0, 0]} />
+                  <Bar dataKey="완료미션수" fill="#818CF8" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+
+        {/* Badges Distribution Chart */}
+        <div className="bg-[#F3EFEA] rounded-[28px] p-6 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-base font-extrabold text-[#141413]">
+                마니또 뱃지 5종 학급 획득 현황
+              </h2>
+              <p className="text-xs text-[#6B665E] mt-0.5">
+                친절 새싹 · 소통 우체부 · 장점 관찰자 · 든든한 돌보미 · 마니또 스타
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl p-4 h-80">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={badgeDistribution}>
+              <BarChart
+                data={badgeDistribution}
+                margin={{ top: 20, right: 20, left: 0, bottom: 20 }}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke="#EFECE6" />
-                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                <XAxis
+                  dataKey="name"
+                  interval={0}
+                  tick={{ fontSize: 11, fill: '#141413', fontWeight: 600 }}
+                />
                 <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
                 <Tooltip />
+                <Legend wrapperStyle={{ fontSize: 12, paddingTop: '10px' }} />
                 <Bar dataKey="획득학생수" fill="#F59E0B" radius={[8, 8, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
+        </div>
+      </div>
+
+      {/* Complete Student Roster Table for Easy Reference */}
+      <div className="bg-[#F3EFEA] rounded-[28px] p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-extrabold text-[#141413]">
+              📋 전체 학생 친절 통계 상세 목록 ({studentChartData.length}명)
+            </h2>
+            <p className="text-xs text-[#6B665E] mt-0.5">
+              학급 전체 학생들의 세부 점수와 활동 달성률을 한눈에 확인합니다.
+            </p>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl overflow-x-auto border border-[#E2DDD3]">
+          <table className="w-full text-left border-collapse min-w-[650px]">
+            <thead>
+              <tr className="border-b border-[#EFECE6] text-xs text-[#6B665E]">
+                <th className="py-3 px-4 text-center w-12">순번</th>
+                <th className="py-3 px-4">학생 이름 / 아이디</th>
+                <th className="py-3 px-4 text-center">계정 상태</th>
+                <th className="py-3 px-4 text-right">누적 점수</th>
+                <th className="py-3 px-4 text-right">완료 미션 수</th>
+                <th className="py-3 px-4 text-right">획득 뱃지 수</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#EFECE6] text-xs">
+              {studentChartData.map((stu, index) => (
+                <tr key={stu.uid} className="hover:bg-[#FAF9F6]">
+                  <td className="py-3 px-4 text-center text-[#8C827A] font-bold">
+                    {index + 1}
+                  </td>
+                  <td className="py-3 px-4 font-bold text-[#141413]">
+                    <div className="flex items-center gap-2">
+                      <span>{stu.name}</span>
+                      <span className="font-mono text-[11px] text-[#6B665E] font-normal">
+                        ({stu.loginId})
+                      </span>
+                    </div>
+                  </td>
+                  <td className="py-3 px-4 text-center">
+                    <span
+                      className={`px-2 py-0.5 rounded-lg text-[10px] font-extrabold ${
+                        stu.status === 'active'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-rose-100 text-rose-700'
+                      }`}
+                    >
+                      {stu.status === 'active' ? '활성' : '비활성'}
+                    </span>
+                  </td>
+                  <td className="py-3 px-4 text-right font-extrabold text-[#141413] tabular-nums">
+                    {stu.점수}점
+                  </td>
+                  <td className="py-3 px-4 text-right text-[#3D3A35] font-semibold tabular-nums">
+                    {stu.완료미션수}회
+                  </td>
+                  <td className="py-3 px-4 text-right text-amber-700 font-extrabold tabular-nums">
+                    {stu.획득뱃지수}개
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -4020,6 +4226,8 @@ const TeacherSettingsAndAuditView: React.FC<TeacherContextProps> = ({
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [changingPw, setChangingPw] = useState(false);
+
+  const [deletingLogs, setDeletingLogs] = useState(false);
 
   const handleSaveTeacherCredentials = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -4394,33 +4602,88 @@ const TeacherSettingsAndAuditView: React.FC<TeacherContextProps> = ({
       </form>
 
       {/* Immutable Audit Logs Table */}
-      <div className="bg-[#F3EFEA] rounded-[28px] p-6">
-        <h2 className="text-base font-extrabold text-[#141413] mb-3">
-          감사 로그 (Audit Logs · 수정 및 삭제 불가)
-        </h2>
+      <div className="bg-[#F3EFEA] rounded-[28px] p-6 space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-extrabold text-[#141413]">
+              보안 감사 로그 (Audit Logs)
+            </h2>
+            <p className="text-xs text-[#6B665E] mt-0.5">
+              학급 운영 및 관리자 활동 기록입니다. 필요 시 개별 로그를 삭제하거나 전체 비울 수 있습니다.
+            </p>
+          </div>
+          {auditLogs.length > 0 && (
+            <button
+              type="button"
+              disabled={deletingLogs}
+              onClick={async () => {
+                if (window.confirm('모든 감사 로그 기록을 서버에서 완전히 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.')) {
+                  setDeletingLogs(true);
+                  try {
+                    const count = await deleteAllAuditLogs(workspaceOwnerUid);
+                    onNotify(`총 ${count}건의 감사 로그가 서버에서 완전히 삭제되었습니다.`, 'success');
+                  } catch (err) {
+                    onNotify('감사 로그 전체 삭제 중 오류 발생: ' + (err instanceof Error ? err.message : String(err)), 'error');
+                  } finally {
+                    setDeletingLogs(false);
+                  }
+                }
+              }}
+              className="px-3.5 py-1.5 rounded-xl bg-rose-100 text-rose-800 text-xs font-bold hover:bg-rose-200 cursor-pointer transition-colors disabled:opacity-50"
+            >
+              {deletingLogs ? '서버 삭제 진행 중...' : '🗑️ 전체 로그 삭제'}
+            </button>
+          )}
+        </div>
+
         <div className="bg-white rounded-2xl overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[640px]">
-            <thead>
-              <tr className="border-b border-[#EFECE6] text-xs text-[#6B665E]">
-                <th className="py-3 px-4">작업자</th>
-                <th className="py-3 px-4">작업 유형</th>
-                <th className="py-3 px-4">사유</th>
-                <th className="py-3 px-4">상세 내역</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#EFECE6] text-xs">
-              {auditLogs.map((log) => (
-                <tr key={log.logId}>
-                  <td className="py-3 px-4 font-bold text-[#141413]">{log.actorName}</td>
-                  <td className="py-3 px-4 font-mono text-[11px] text-indigo-700">
-                    {log.action}
-                  </td>
-                  <td className="py-3 px-4 text-[#3D3A35]">{log.reason}</td>
-                  <td className="py-3 px-4 text-[#6B665E]">{log.metadataSummary}</td>
+          {auditLogs.length === 0 ? (
+            <div className="p-8 text-center text-xs text-[#6B665E]">
+              기록된 감사 로그가 없습니다.
+            </div>
+          ) : (
+            <table className="w-full text-left border-collapse min-w-[700px]">
+              <thead>
+                <tr className="border-b border-[#EFECE6] text-xs text-[#6B665E]">
+                  <th className="py-3 px-4">작업자</th>
+                  <th className="py-3 px-4">작업 유형</th>
+                  <th className="py-3 px-4">사유</th>
+                  <th className="py-3 px-4">상세 내역</th>
+                  <th className="py-3 px-4 text-center">관리</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-[#EFECE6] text-xs">
+                {auditLogs.map((log) => (
+                  <tr key={log.logId} className="hover:bg-[#FAF9F6]">
+                    <td className="py-3 px-4 font-bold text-[#141413]">{log.actorName}</td>
+                    <td className="py-3 px-4 font-mono text-[11px] text-indigo-700">
+                      {log.action}
+                    </td>
+                    <td className="py-3 px-4 text-[#3D3A35]">{log.reason}</td>
+                    <td className="py-3 px-4 text-[#6B665E]">{log.metadataSummary}</td>
+                    <td className="py-3 px-4 text-center">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (window.confirm(`[${log.action}] 로그를 삭제하시겠습니까?`)) {
+                            try {
+                              await deleteAuditLog(log.logId);
+                              onNotify('감사 로그가 삭제되었습니다.', 'success');
+                            } catch (err) {
+                              onNotify('로그 삭제 실패', 'error');
+                            }
+                          }
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-rose-50 text-rose-700 text-[11px] font-bold hover:bg-rose-100 cursor-pointer"
+                      >
+                        삭제
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </div>
